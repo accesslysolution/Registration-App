@@ -12,7 +12,7 @@ import Link from 'next/link';
 
 type SaveStatus = 'idle' | 'saving' | 'success' | 'error';
 
-export default function RegistrationPage() {
+export default function ManualRegistrationPage() {
   const [nextPassNo, setNextPassNo] = useState<number>(1);
 
   // Form State
@@ -25,12 +25,14 @@ export default function RegistrationPage() {
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('cash');
   const [isPaid, setIsPaid] = useState<boolean>(true);
 
+  // Direct Manual Rate Per Person State
+  const [ratePerPersonInput, setRatePerPersonInput] = useState<string>('');
+
   // Save / Network states
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [datesError, setDatesError] = useState<string | null>(null);
 
-  // Full-screen confirmation card state for multi-member booking
   const [confirmedBooking, setConfirmedBooking] = useState<RegistrationWithMembers | null>(null);
 
   const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
@@ -43,7 +45,7 @@ export default function RegistrationPage() {
     fetchNextPass();
   }, []);
 
-  // Sync members array length and error state with 'persons' stepper
+  // Sync members array length with 'persons' stepper
   useEffect(() => {
     setMembers((prev) => {
       if (prev.length === persons) return prev;
@@ -56,15 +58,23 @@ export default function RegistrationPage() {
     setMemberErrors((prev) => prev.slice(0, persons));
   }, [persons]);
 
-  // Live calculations using shared config module
-  const rates = useMemo(() => getRatesForGroupSize(persons), [persons]);
-  const currentRatePerPerson = passType === 'full-season' ? rates.fullSeasonRate : rates.perDayRate;
-  
-  const liveTotal = useMemo(() => {
-    return calculatePassTotal(passType === 'full-season' ? 'full_season' : 'per_day', persons, selectedDates.length);
-  }, [passType, persons, selectedDates]);
+  // Standard fallback rates
+  const standardRates = useMemo(() => getRatesForGroupSize(persons), [persons]);
+  const defaultStandardRate = passType === 'full-season' ? standardRates.fullSeasonRate : standardRates.perDayRate;
 
-  // Handlers for Group Size Stepper
+  // Final resolved rate per person (Manual input or default)
+  const resolvedRatePerPerson = useMemo(() => {
+    if (ratePerPersonInput !== '') {
+      return parseFloat(ratePerPersonInput) || 0;
+    }
+    return defaultStandardRate;
+  }, [ratePerPersonInput, defaultStandardRate]);
+
+  // Final Total calculation (Persons × Resolved Rate Per Person)
+  const finalTotal = useMemo(() => {
+    return persons * resolvedRatePerPerson;
+  }, [persons, resolvedRatePerPerson]);
+
   const handleDecrementPersons = () => setPersons((prev) => Math.max(1, prev - 1));
   const handleIncrementPersons = () => setPersons((prev) => prev + 1);
 
@@ -80,7 +90,6 @@ export default function RegistrationPage() {
     });
   };
 
-  // Date Chip Toggle
   const toggleDate = (dateId: string) => {
     setDatesError(null);
     setSelectedDates((prev) => 
@@ -88,7 +97,6 @@ export default function RegistrationPage() {
     );
   };
 
-  // Submit and Save using Supabase backend storage layer
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let isValid = true;
@@ -127,11 +135,12 @@ export default function RegistrationPage() {
           pass_type: passType,
           valid_dates: selectedDates,
           persons,
-          rate: currentRatePerPerson,
-          total: liveTotal,
+          rate: resolvedRatePerPerson,
+          total: finalTotal,
           payment_mode: paymentMode,
           paid: isPaid,
           created_by: staffName,
+          is_manual: true, // Tagged explicitly for accurate accounting tallying
         },
         members
       );
@@ -152,7 +161,6 @@ export default function RegistrationPage() {
     }
   };
 
-  // Reset form for next entry after confirmation
   const handleResetForNext = async () => {
     setPersons(1);
     setMembers([{ name: '', phone: '' }]);
@@ -160,6 +168,7 @@ export default function RegistrationPage() {
     setSelectedDates([]);
     setPaymentMode('cash');
     setIsPaid(true);
+    setRatePerPersonInput('');
     setMemberErrors([]);
     setDatesError(null);
     setSaveStatus('idle');
@@ -174,8 +183,8 @@ export default function RegistrationPage() {
       {/* Top Header info */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
         <div>
-          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Terminal</span>
-          <h1 className="text-2xl font-black tracking-tight text-white">New Registration</h1>
+          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Terminal (Manual Price)</span>
+          <h1 className="text-2xl font-black tracking-tight text-white">Custom Registration</h1>
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className="bg-slate-900 border border-amber-500/40 px-3 py-1.5 rounded-xl text-right shadow-lg">
@@ -183,25 +192,24 @@ export default function RegistrationPage() {
             <span className="text-xl font-black text-amber-400">#{nextPassNo}</span>
           </div>
           <Link 
-            href="/manual-registration" 
+            href="/registration" 
             className="text-[11px] font-bold text-amber-400 hover:underline flex items-center gap-0.5 pt-0.5"
           >
-            <span>Switch to Manual Pricing</span>
-            <span>↗</span>
+            <span>← Standard Pricing</span>
           </Link>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         
-        {/* 1. Number of Persons (Stepper) */}
+        {/* Number of Persons (Stepper) */}
         <div className="space-y-2 bg-slate-900/60 border border-slate-800/80 p-4 rounded-2xl">
           <div className="flex justify-between items-center mb-1">
             <label className="block text-sm font-bold uppercase tracking-wide text-slate-300">
               Number of Persons
             </label>
             <span className="text-xs bg-amber-500/10 text-amber-400 font-bold px-2.5 py-1 rounded-lg border border-amber-500/20">
-              Rate Tier: ₹{currentRatePerPerson}/p
+              Standard Tier: ₹{defaultStandardRate}/p
             </span>
           </div>
           
@@ -231,7 +239,7 @@ export default function RegistrationPage() {
           </div>
         </div>
 
-        {/* 2. Dynamic Individual Attendee Details Fields */}
+        {/* Dynamic Individual Attendee Details Fields */}
         <div className="space-y-3">
           <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
             Individual Pass Details ({persons} {persons === 1 ? 'Person' : 'Persons'})
@@ -280,10 +288,10 @@ export default function RegistrationPage() {
           })}
         </div>
 
-        {/* 3. Pass Type Toggle */}
+        {/* Pass Type Toggle */}
         <div className="space-y-2">
           <label className="block text-sm font-bold uppercase tracking-wide text-slate-300">
-            Pass Type (Shared for Group)
+            Pass Type
           </label>
           <div className="grid grid-cols-2 gap-3">
             <button
@@ -313,7 +321,6 @@ export default function RegistrationPage() {
           </div>
         </div>
 
-        {/* 4. Conditional Date Chips Selector (if Per Day) */}
         {passType === 'per-day' && (
           <div className="space-y-2 bg-slate-900/40 p-4 rounded-2xl border border-amber-500/30 animate-fadeIn">
             <div className="flex justify-between items-center mb-2">
@@ -347,7 +354,29 @@ export default function RegistrationPage() {
           </div>
         )}
 
-        {/* 5. Payment Mode & Paid Status Toggles */}
+        {/* DIRECT MANUAL RATE PER PERSON INPUT (Scroll-locked) */}
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-2">
+          <label className="text-xs font-bold uppercase tracking-wide text-amber-400 block">
+            Price Per Person (₹)
+          </label>
+          <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-amber-400 font-bold text-lg">₹</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={ratePerPersonInput}
+              onChange={(e) => setRatePerPersonInput(e.target.value)}
+              onWheel={(e) => e.currentTarget.blur()}
+              placeholder={`Standard default is ₹${defaultStandardRate}`}
+              className="w-full bg-slate-950 border border-amber-500/60 rounded-xl pl-10 pr-4 py-3 text-lg font-black text-amber-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+          </div>
+          <span className="text-[10px] text-slate-400 block">
+            Leave blank to use standard tier rate (₹{defaultStandardRate}/person).
+          </span>
+        </div>
+
+        {/* Payment Mode & Paid Status Toggles */}
         <div className="grid grid-cols-2 gap-4 pt-2">
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Payment Mode</label>
@@ -405,18 +434,16 @@ export default function RegistrationPage() {
         {/* Live Calculation Banner */}
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between shadow-xl mt-6">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Calculation</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Total Calculation</span>
             <div className="text-xs text-slate-300 font-medium">
-              {persons} {persons === 1 ? 'pass' : 'passes'} × ₹{currentRatePerPerson}
-              {passType === 'per-day' ? ` × ${selectedDates.length} days` : ''}
+              {persons} {persons === 1 ? 'person' : 'persons'} × ₹{resolvedRatePerPerson}
             </div>
           </div>
           <div className="text-right">
-            <span className="text-2xl font-black text-amber-400">₹{liveTotal}</span>
+            <span className="text-2xl font-black text-amber-400">₹{finalTotal}</span>
           </div>
         </div>
 
-        {/* Error Banner with Retry */}
         {saveStatus === 'error' && (
           <div className="bg-rose-950 border border-rose-500 p-3 rounded-2xl flex items-center justify-between text-xs text-rose-300">
             <span>Failed: {errorMessage}</span>
@@ -424,7 +451,6 @@ export default function RegistrationPage() {
           </div>
         )}
 
-        {/* Submit Big Action Button */}
         <button
           type="submit"
           disabled={saveStatus === 'saving'}
@@ -434,17 +460,12 @@ export default function RegistrationPage() {
               : 'bg-amber-500 active:bg-amber-400 text-slate-950 border-amber-400 shadow-amber-500/25'
           }`}
         >
-          <span>{saveStatus === 'saving' ? 'Saving to Database...' : `Generate ${persons} Individual Passes`}</span>
-          {saveStatus !== 'saving' && (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          )}
+          <span>{saveStatus === 'saving' ? 'Saving to Database...' : `Generate ${persons} Passes (₹${finalTotal})`}</span>
         </button>
 
       </form>
 
-      {/* FULL-SCREEN CONFIRMATION MODAL CARD (Lists all assigned individual pass numbers) */}
+      {/* Confirmation Modal */}
       {confirmedBooking && (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-slate-900 border-2 border-amber-500 w-full max-w-[390px] rounded-3xl p-6 shadow-2xl text-center space-y-5 relative overflow-hidden max-h-[90vh] flex flex-col">
@@ -458,12 +479,10 @@ export default function RegistrationPage() {
             <div>
               <span className="text-xs font-bold uppercase tracking-widest text-amber-400 block mb-0.5">Registration Successful</span>
               <h2 className="text-2xl font-black text-white tracking-tight">{confirmedBooking.persons} Passes Generated</h2>
-              <span className="text-[11px] text-slate-400 block mt-0.5">Each person has their own unique pass number</span>
             </div>
 
-            {/* List of assigned passes */}
             <div className="space-y-2 text-left overflow-y-auto pr-1 grow">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">Assigned Pass Numbers & Wristbands:</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Assigned Pass Numbers:</span>
               {confirmedBooking.members.map((m) => (
                 <div key={m.pass_no} className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
                   <div>
@@ -476,7 +495,7 @@ export default function RegistrationPage() {
             </div>
 
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 flex justify-between items-center shrink-0">
-              <span className="text-xs uppercase font-bold text-amber-400">Total Booking Amount</span>
+              <span className="text-xs uppercase font-bold text-amber-400">Total Charged</span>
               <span className="text-xl font-black text-amber-400">₹{confirmedBooking.total}</span>
             </div>
 

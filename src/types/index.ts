@@ -12,6 +12,7 @@ export interface RegistrationGroup {
   paid: boolean;
   created_by?: string;
   created_at: string;
+  is_manual?: boolean; // Added for manual custom pricing tracking and accounting tallies
 }
 
 export interface RegistrationMember {

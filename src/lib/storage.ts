@@ -45,7 +45,7 @@ export async function addRegistration(
   groupData: Omit<RegistrationGroup, 'id' | 'created_at'>,
   memberInputs: { name: string; phone: string }[]
 ): Promise<RegistrationWithMembers> {
-  // 1. Insert Group Booking record
+  // 1. Insert Group Booking record with is_manual flag
   const { data: groupResult, error: groupError } = await supabase
     .from('registration_groups')
     .insert([
@@ -58,6 +58,7 @@ export async function addRegistration(
         payment_mode: groupData.payment_mode,
         paid: groupData.paid,
         created_by: groupData.created_by,
+        is_manual: groupData.is_manual ?? false, // Stored successfully for accounting tallies
       },
     ])
     .select('*')
