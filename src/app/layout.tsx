@@ -14,7 +14,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
 
   useEffect(() => {
-    setStaffList(getStaff());
+    async function loadStaff() {
+      const staff = await getStaff();
+      setStaffList(staff);
+    }
+    loadStaff();
+
     const savedName = sessionStorage.getItem('garba_logged_staff');
     if (savedName) {
       setLoggedStaff({ name: savedName, pin: '' });
@@ -97,6 +102,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
                 <button
                   key={digit}
+                  type="button"
                   onClick={() => handlePinDigit(digit)}
                   className="h-16 bg-slate-900 active:bg-slate-800 border border-slate-800 rounded-2xl text-2xl font-black text-white shadow-md active:scale-95 transition-transform"
                 >
@@ -105,12 +111,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               ))}
               <div />
               <button
+                type="button"
                 onClick={() => handlePinDigit('0')}
                 className="h-16 bg-slate-900 active:bg-slate-800 border border-slate-800 rounded-2xl text-2xl font-black text-white shadow-md active:scale-95 transition-transform"
               >
                 0
               </button>
               <button
+                type="button"
                 onClick={handlePinDelete}
                 className="h-16 bg-slate-900/60 active:bg-slate-800 border border-slate-800/80 rounded-2xl text-sm font-bold text-slate-400 shadow-md active:scale-95 transition-transform flex items-center justify-center"
               >

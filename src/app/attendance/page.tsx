@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { RegistrationMember, PassType } from '@/types';
 import { getRegistrationMembers, getRegistrationGroups, getAttendanceForPass, markAttendance } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
 
 // Active event date ID for today's scans (matches settings/storage)
 const CURRENT_EVENT_DATE_ID = 'd4';
@@ -36,8 +37,8 @@ export default function AttendancePage() {
     inputRef.current?.focus();
   }, []);
 
-  // Handle Pass Lookup Check against Local Storage Data Layer
-  const handleCheckPass = (e?: React.FormEvent, overridePassNo?: number) => {
+  // Handle Pass Lookup Check against Data Layer
+  const handleCheckPass = async (e?: React.FormEvent, overridePassNo?: number) => {
     if (e) e.preventDefault();
     const targetPassNo = overridePassNo !== undefined ? overridePassNo : parseInt(passInput.trim(), 10);
     
@@ -49,7 +50,7 @@ export default function AttendancePage() {
 
     try {
       // 1. Fetch individual member by unique pass number
-      const members = getRegistrationMembers();
+      const members = await getRegistrationMembers();
       const member = members.find((m) => m.pass_no === targetPassNo);
 
       if (!member) {
@@ -60,7 +61,7 @@ export default function AttendancePage() {
       }
 
       // 2. Fetch parent booking group for pass type & valid dates
-      const groups = getRegistrationGroups();
+      const groups = await getRegistrationGroups();
       const group = groups.find((g) => g.id === member.group_id);
       const passType = group ? group.pass_type : 'full-season';
       const validDates = group ? group.valid_dates : [];
@@ -79,7 +80,7 @@ export default function AttendancePage() {
       }
 
       // 4. Check attendance log for today
-      const attendanceLog = getAttendanceForPass(targetPassNo, CURRENT_EVENT_DATE_ID);
+      const attendanceLog = await getAttendanceForPass(targetPassNo, CURRENT_EVENT_DATE_ID);
       
       if (attendanceLog) {
         const lastEntryTime = new Date(attendanceLog.marked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -107,7 +108,7 @@ export default function AttendancePage() {
   };
 
   // Handle Marking Attendance (1 Pass = 1 Person)
-  const handleMarkPresent = () => {
+  const handleMarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
 
@@ -115,7 +116,7 @@ export default function AttendancePage() {
     setErrorMessage('');
 
     try {
-      const res = markAttendance(passNo, CURRENT_EVENT_DATE_ID, staffName);
+      const res = await markAttendance(passNo, CURRENT_EVENT_DATE_ID, staffName);
 
       if (!res.success) {
         setActionStatus('error');
@@ -139,8 +140,8 @@ export default function AttendancePage() {
     }
   };
 
-  // Handle Unmarking / Undoing Attendance Entry
-  const handleUnmarkPresent = () => {
+  // Handle Unmarking / Undoing Attendance Entry from Supabase
+  const handleUnmarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
 
@@ -148,21 +149,18 @@ export default function AttendancePage() {
     setErrorMessage('');
 
     try {
-      if (typeof window === 'undefined') return;
-      const data = localStorage.getItem('garba_attendance');
-      const attendance: any[] = data ? JSON.parse(data) : [];
+      const { error } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('pass_no', passNo)
+        .eq('event_date', CURRENT_EVENT_DATE_ID);
 
-      // Filter out today's attendance record for this pass number
-      const updatedAttendance = attendance.filter(
-        (a) => !(a.pass_no === passNo && a.event_date === CURRENT_EVENT_DATE_ID)
-      );
-
-      localStorage.setItem('garba_attendance', JSON.stringify(updatedAttendance));
+      if (error) throw error;
 
       triggerVibration('success');
 
       // Re-run check pass to immediately update screen back to "READY" state
-      handleCheckPass(undefined, passNo);
+      await handleCheckPass(undefined, passNo);
       setActionStatus('idle');
     } catch (err: any) {
       console.error(err);

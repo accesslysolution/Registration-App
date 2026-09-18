@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { FreeEntry } from '@/types';
 import { addFreeEntry, getFreeEntries } from '@/lib/storage';
 
@@ -8,21 +8,30 @@ export default function FreeEntryPage() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   
-  // Local session state for tracking entries & counter
-  const [entries, setEntries] = useState<FreeEntry[]>(() => getFreeEntries());
+  // Session state for tracking entries & counter
+  const [entries, setEntries] = useState<FreeEntry[]>([]);
   
   // Validation and UI feedback states
   const [nameError, setNameError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   
-  // Save states for weak wifi handling
+  // Save states for backend network handling
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [showToast, setShowToast] = useState(false);
 
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('staff_name') || 'Gate Staff' : 'Gate Staff';
+  const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
+
+  // Load initial entries from Supabase on mount
+  useEffect(() => {
+    async function loadEntries() {
+      const data = await getFreeEntries();
+      setEntries(data);
+    }
+    loadEntries();
+  }, []);
 
   // Handle phone change and check for duplicate in session list (non-blocking)
   const handlePhoneChange = (val: string) => {
@@ -43,7 +52,7 @@ export default function FreeEntryPage() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let isValid = true;
 
@@ -68,15 +77,16 @@ export default function FreeEntryPage() {
     setErrorMessage('');
 
     try {
-      // Save directly using our storage data layer helper
-      addFreeEntry({
+      // Save directly using async storage data layer helper
+      await addFreeEntry({
         name: name.trim(),
         phone: cleanPhone,
         created_by: staffName,
       });
 
-      // Refresh session entries list from storage
-      setEntries(getFreeEntries());
+      // Refresh session entries list from Supabase
+      const updatedEntries = await getFreeEntries();
+      setEntries(updatedEntries);
 
       // Haptic feedback if supported
       if (typeof window !== 'undefined' && navigator.vibrate) {
@@ -119,7 +129,7 @@ export default function FreeEntryPage() {
           <h1 className="text-2xl font-black tracking-tight text-white">Free Entry</h1>
         </div>
         <div className="bg-slate-900 border border-amber-500/40 px-3.5 py-2 rounded-2xl text-right shadow-lg">
-          <span className="text-[10px] uppercase text-slate-400 block font-bold">Session Total</span>
+          <span className="text-[10px] uppercase text-slate-400 block font-bold">Total Entries</span>
           <span className="text-2xl font-black text-amber-400">{entries.length}</span>
         </div>
       </div>
@@ -190,7 +200,7 @@ export default function FreeEntryPage() {
               : 'bg-amber-500 active:bg-amber-400 text-slate-950 border-amber-400 shadow-amber-500/25'
           }`}
         >
-          <span>{saveStatus === 'saving' ? 'Saving...' : 'Save Free Entry'}</span>
+          <span>{saveStatus === 'saving' ? 'Saving to Database...' : 'Save Free Entry'}</span>
           {saveStatus !== 'saving' && (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
@@ -204,8 +214,8 @@ export default function FreeEntryPage() {
       {entries.length > 0 && (
         <div className="mt-8 space-y-3">
           <div className="flex justify-between items-center">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">Saved This Session</h2>
-            <span className="text-xs text-slate-500 font-mono">Showing recent</span>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">Recent Free Entries</h2>
+            <span className="text-xs text-slate-500 font-mono">Database synced</span>
           </div>
           
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -216,7 +226,7 @@ export default function FreeEntryPage() {
                   <span className="font-mono text-xs text-slate-400">+91 {entry.phone}</span>
                 </div>
                 <span className="text-[10px] text-slate-500 font-mono">
-                  {new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {entry.created_at ? new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
                 </span>
               </div>
             ))}

@@ -35,7 +35,11 @@ export default function RegistrationPage() {
   const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
 
   useEffect(() => {
-    setNextPassNo(getNextPassNo());
+    async function fetchNextPass() {
+      const passNo = await getNextPassNo();
+      setNextPassNo(passNo);
+    }
+    fetchNextPass();
   }, []);
 
   // Sync members array length and error state with 'persons' stepper
@@ -83,8 +87,8 @@ export default function RegistrationPage() {
     );
   };
 
-  // Submit and Save using local storage layer
-  const handleSubmit = (e: React.FormEvent) => {
+  // Submit and Save using Supabase backend storage layer
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let isValid = true;
     const errors: { name?: string; phone?: string }[] = [];
@@ -117,7 +121,7 @@ export default function RegistrationPage() {
     setErrorMessage('');
 
     try {
-      const newBooking = addRegistration(
+      const newBooking = await addRegistration(
         {
           pass_type: passType,
           valid_dates: selectedDates,
@@ -148,7 +152,7 @@ export default function RegistrationPage() {
   };
 
   // Reset form for next entry after confirmation
-  const handleResetForNext = () => {
+  const handleResetForNext = async () => {
     setPersons(1);
     setMembers([{ name: '', phone: '' }]);
     setPassType('full-season');
@@ -159,7 +163,8 @@ export default function RegistrationPage() {
     setDatesError(null);
     setSaveStatus('idle');
     setConfirmedBooking(null);
-    setNextPassNo(getNextPassNo());
+    const passNo = await getNextPassNo();
+    setNextPassNo(passNo);
   };
 
   return (
@@ -419,7 +424,7 @@ export default function RegistrationPage() {
               : 'bg-amber-500 active:bg-amber-400 text-slate-950 border-amber-400 shadow-amber-500/25'
           }`}
         >
-          <span>{saveStatus === 'saving' ? 'Generating Passes...' : `Generate ${persons} Individual Passes`}</span>
+          <span>{saveStatus === 'saving' ? 'Saving to Database...' : `Generate ${persons} Individual Passes`}</span>
           {saveStatus !== 'saving' && (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M14 5l7 7m0 0l-7 7m7-7H3" />

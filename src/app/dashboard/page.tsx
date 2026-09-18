@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { RegistrationWithMembers, RegistrationMember } from '@/types';
 import { getFullRegistrations, getAttendanceForPass, getFreeEntries } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
 
 export default function DashboardPage() {
   const [registrations, setRegistrations] = useState<RegistrationWithMembers[]>([]);
@@ -21,22 +22,23 @@ export default function DashboardPage() {
     fetchDashboardData();
   }, []);
 
-  const fetchDashboardData = () => {
+  const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const data = getFullRegistrations();
+      const data = await getFullRegistrations();
       setRegistrations(data);
 
       // Calculate today's attendance sum (active event date 'd4')
       const activeDateId = 'd4';
       let totalEnteredToday = 0;
-      data.forEach((group) => {
-        group.members.forEach((m) => {
-          if (getAttendanceForPass(m.pass_no, activeDateId)) {
+      for (const group of data) {
+        for (const m of group.members) {
+          const att = await getAttendanceForPass(m.pass_no, activeDateId);
+          if (att) {
             totalEnteredToday++;
           }
-        });
-      });
+        }
+      }
       setTodayAttendanceCount(totalEnteredToday);
     } catch (err: any) {
       console.error('Error fetching dashboard data:', err);
@@ -73,8 +75,8 @@ export default function DashboardPage() {
     );
   }, [allMembersList, searchQuery]);
 
-  // Handle Edit Save for Individual Member Pass & Group Payment
-  const handleSaveEdit = (e: React.FormEvent) => {
+  // Handle Edit Save for Individual Member Pass & Group Payment via Supabase
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMemberPass) return;
 
@@ -82,30 +84,30 @@ export default function DashboardPage() {
     setErrorMessage('');
 
     try {
-      const groups = getFullRegistrations();
-      const updatedGroups = groups.map((g) => {
-        if (g.id === editingMemberPass.group.id) {
-          return {
-            ...g,
-            paid: editingMemberPass.group.paid,
-            payment_mode: editingMemberPass.group.payment_mode,
-            members: g.members.map((m) =>
-              m.pass_no === editingMemberPass.member.pass_no ? editingMemberPass.member : m
-            ),
-          };
-        }
-        return g;
-      });
+      // 1. Update member details in Supabase
+      const { error: memberError } = await supabase
+        .from('registration_members')
+        .update({
+          name: editingMemberPass.member.name.trim(),
+          phone: editingMemberPass.member.phone.replace(/\D/g, ''),
+        })
+        .eq('pass_no', editingMemberPass.member.pass_no);
 
-      // Persist back to local storage
-      const rawGroups = updatedGroups.map(({ members, ...g }) => g);
-      const rawMembers: RegistrationMember[] = [];
-      updatedGroups.forEach((g) => rawMembers.push(...g.members));
+      if (memberError) throw memberError;
 
-      localStorage.setItem('garba_registration_groups', JSON.stringify(rawGroups));
-      localStorage.setItem('garba_registration_members', JSON.stringify(rawMembers));
+      // 2. Update group payment status & mode in Supabase
+      const { error: groupError } = await supabase
+        .from('registration_groups')
+        .update({
+          paid: editingMemberPass.group.paid,
+          payment_mode: editingMemberPass.group.payment_mode,
+        })
+        .eq('id', editingMemberPass.group.id);
 
-      setRegistrations(updatedGroups);
+      if (groupError) throw groupError;
+
+      // Refresh data
+      await fetchDashboardData();
       setSaveStatus('idle');
       setEditingMemberPass(null);
       if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate(60);
@@ -118,7 +120,7 @@ export default function DashboardPage() {
   };
 
   // CSV Export utility
-  const exportCSV = (type: 'registrations' | 'attendance' | 'free') => {
+  const exportCSV = async (type: 'registrations' | 'attendance' | 'free') => {
     try {
       let csvContent = 'data:text/csv;charset=utf-8,';
       
@@ -130,14 +132,13 @@ export default function DashboardPage() {
           });
         });
       } else if (type === 'attendance') {
-        const rawAttendance = typeof window !== 'undefined' ? localStorage.getItem('garba_attendance') : null;
-        const attendanceList = rawAttendance ? JSON.parse(rawAttendance) : [];
+        const { data: attendanceList } = await supabase.from('attendance').select('*');
         csvContent += 'PassNumber,EventDate,MarkedBy,MarkedAt\n';
-        attendanceList.forEach((a: any) => {
+        attendanceList?.forEach((a: any) => {
           csvContent += `${a.pass_no},${a.event_date},"${a.marked_by || ''}",${a.marked_at}\n`;
         });
       } else {
-        const freeList = getFreeEntries();
+        const freeList = await getFreeEntries();
         csvContent += 'ID,Name,Phone,CreatedBy,CreatedAt\n';
         freeList.forEach((f) => {
           csvContent += `${f.id},"${f.name}",${f.phone},"${f.created_by || ''}",${f.created_at}\n`;
