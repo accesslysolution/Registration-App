@@ -37,7 +37,7 @@ export default function AttendancePage() {
     inputRef.current?.focus();
   }, []);
 
-  // Handle Pass Lookup Check against Data Layer
+  // Handle Pass Lookup Check against Supabase Database Layer
   const handleCheckPass = async (e?: React.FormEvent, overridePassNo?: number) => {
     if (e) e.preventDefault();
     const targetPassNo = overridePassNo !== undefined ? overridePassNo : parseInt(passInput.trim(), 10);
@@ -49,7 +49,7 @@ export default function AttendancePage() {
     setErrorMessage('');
 
     try {
-      // 1. Fetch individual member by unique pass number
+      // 1. Fetch individual member by unique pass number directly from Supabase via storage helper
       const members = await getRegistrationMembers();
       const member = members.find((m) => m.pass_no === targetPassNo);
 
@@ -60,7 +60,7 @@ export default function AttendancePage() {
         return;
       }
 
-      // 2. Fetch parent booking group for pass type & valid dates
+      // 2. Fetch parent booking group for pass type & valid dates from Supabase
       const groups = await getRegistrationGroups();
       const group = groups.find((g) => g.id === member.group_id);
       const passType = group ? group.pass_type : 'full-season';
@@ -79,7 +79,7 @@ export default function AttendancePage() {
         return;
       }
 
-      // 4. Check attendance log for today
+      // 4. Check live attendance table in Supabase for today's entry
       const attendanceLog = await getAttendanceForPass(targetPassNo, CURRENT_EVENT_DATE_ID);
       
       if (attendanceLog) {
@@ -101,13 +101,13 @@ export default function AttendancePage() {
       triggerVibration('success');
     } catch (err: any) {
       console.error(err);
-      alert(err.message || 'Error checking pass');
+      alert(err.message || 'Error checking pass with database');
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle Marking Attendance (1 Pass = 1 Person)
+  // Handle Marking Attendance in Supabase Database (1 Pass = 1 Person)
   const handleMarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
@@ -120,7 +120,7 @@ export default function AttendancePage() {
 
       if (!res.success) {
         setActionStatus('error');
-        setErrorMessage(res.message || 'Entry rejected.');
+        setErrorMessage(res.message || 'Entry rejected by database.');
         triggerVibration('error');
         return;
       }
@@ -135,12 +135,12 @@ export default function AttendancePage() {
     } catch (err: any) {
       console.error(err);
       setActionStatus('error');
-      setErrorMessage(err.message || 'Failed to save attendance');
+      setErrorMessage(err.message || 'Failed to save attendance to database');
       triggerVibration('error');
     }
   };
 
-  // Handle Unmarking / Undoing Attendance Entry from Supabase
+  // Handle Unmarking / Undoing Attendance Entry directly in Supabase Database
   const handleUnmarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
@@ -159,13 +159,13 @@ export default function AttendancePage() {
 
       triggerVibration('success');
 
-      // Re-run check pass to immediately update screen back to "READY" state
+      // Re-run check pass to immediately update screen back to "READY" state from database
       await handleCheckPass(undefined, passNo);
       setActionStatus('idle');
     } catch (err: any) {
       console.error(err);
       setActionStatus('error');
-      setErrorMessage('Failed to unmark attendance');
+      setErrorMessage('Failed to unmark attendance in database');
       triggerVibration('error');
     }
   };
@@ -194,7 +194,7 @@ export default function AttendancePage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
         <div>
-          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Scanner</span>
+          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Scanner (Supabase Live)</span>
           <h1 className="text-2xl font-black tracking-tight text-white">Live Attendance</h1>
         </div>
         <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-right">
@@ -239,7 +239,7 @@ export default function AttendancePage() {
           <div>
             <span className="text-xs font-bold uppercase tracking-widest text-rose-400 block mb-1">Gate Alert</span>
             <h2 className="text-2xl font-black text-white">Registration Does Not Exist</h2>
-            <p className="text-xs text-rose-200 mt-1">Pass number <strong className="text-white font-mono">#{passInput}</strong> has not been registered yet.</p>
+            <p className="text-xs text-rose-200 mt-1">Pass number <strong className="text-white font-mono">#{passInput}</strong> was not found in the database.</p>
           </div>
           <button
             onClick={handleResetScan}
@@ -288,7 +288,7 @@ export default function AttendancePage() {
           
           <div>
             <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-              Valid Individual Pass • Ready
+              Valid Database Pass • Ready
             </span>
             <h2 className="text-3xl font-black text-white mt-2">#{evalResult.member.pass_no}</h2>
             <p className="text-2xl font-bold text-amber-400">{evalResult.member.name}</p>

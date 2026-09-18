@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { RegistrationWithMembers, RegistrationMember } from '@/types';
+import { RegistrationWithMembers, RegistrationMember, FreeEntry } from '@/types';
 import { getFullRegistrations, getAttendanceForPass, getFreeEntries } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
 
 export default function DashboardPage() {
   const [registrations, setRegistrations] = useState<RegistrationWithMembers[]>([]);
+  const [freeEntriesCount, setFreeEntriesCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -25,12 +26,18 @@ export default function DashboardPage() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
+      // 1. Fetch full relational group & member registrations from Supabase via storage layer
       const data = await getFullRegistrations();
       setRegistrations(data);
 
-      // Calculate today's attendance sum (active event date 'd4')
+      // 2. Fetch free entries count from Supabase
+      const freeList = await getFreeEntries();
+      setFreeEntriesCount(freeList.length);
+
+      // 3. Calculate today's attendance count directly from the Supabase attendance table (active event date 'd4')
       const activeDateId = 'd4';
       let totalEnteredToday = 0;
+      
       for (const group of data) {
         for (const m of group.members) {
           const att = await getAttendanceForPass(m.pass_no, activeDateId);
@@ -41,7 +48,7 @@ export default function DashboardPage() {
       }
       setTodayAttendanceCount(totalEnteredToday);
     } catch (err: any) {
-      console.error('Error fetching dashboard data:', err);
+      console.error('Error fetching backend dashboard data:', err);
     } finally {
       setLoading(false);
     }
@@ -75,7 +82,7 @@ export default function DashboardPage() {
     );
   }, [allMembersList, searchQuery]);
 
-  // Handle Edit Save for Individual Member Pass & Group Payment via Supabase
+  // Handle Edit Save for Individual Member Pass & Group Payment directly in Supabase Database
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMemberPass) return;
@@ -84,7 +91,7 @@ export default function DashboardPage() {
     setErrorMessage('');
 
     try {
-      // 1. Update member details in Supabase
+      // 1. Update member name/phone in Supabase database table
       const { error: memberError } = await supabase
         .from('registration_members')
         .update({
@@ -95,7 +102,7 @@ export default function DashboardPage() {
 
       if (memberError) throw memberError;
 
-      // 2. Update group payment status & mode in Supabase
+      // 2. Update group payment status & mode in Supabase database table
       const { error: groupError } = await supabase
         .from('registration_groups')
         .update({
@@ -106,20 +113,20 @@ export default function DashboardPage() {
 
       if (groupError) throw groupError;
 
-      // Refresh data
+      // Refresh data from backend
       await fetchDashboardData();
       setSaveStatus('idle');
       setEditingMemberPass(null);
       if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate(60);
     } catch (err: any) {
-      console.error('Failed to update pass:', err);
+      console.error('Failed to update pass in database:', err);
       setSaveStatus('error');
-      setErrorMessage(err.message || 'Error while updating');
+      setErrorMessage(err.message || 'Error while updating database');
       if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate([100, 50, 100]);
     }
   };
 
-  // CSV Export utility
+  // CSV Export utility querying Supabase directly
   const exportCSV = async (type: 'registrations' | 'attendance' | 'free') => {
     try {
       let csvContent = 'data:text/csv;charset=utf-8,';
@@ -154,7 +161,7 @@ export default function DashboardPage() {
       document.body.removeChild(link);
     } catch (err) {
       console.error('CSV export failed', err);
-      alert('Failed to generate export file.');
+      alert('Failed to generate export file from database.');
     }
   };
 
@@ -164,7 +171,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
         <div>
-          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Admin Overview</span>
+          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Admin Overview (Supabase Live)</span>
           <h1 className="text-2xl font-black tracking-tight text-white">Live Dashboard</h1>
         </div>
         <div className="flex gap-2">
@@ -240,10 +247,10 @@ export default function DashboardPage() {
         </div>
 
         {loading ? (
-          <div className="text-center py-12 text-slate-500 text-sm">Loading passes...</div>
+          <div className="text-center py-12 text-slate-500 text-sm">Loading database records...</div>
         ) : filteredMembers.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-sm bg-slate-900/40 rounded-2xl border border-slate-900">
-            No passes found.
+            No passes found in database.
           </div>
         ) : (
           <div className="space-y-2.5">
@@ -286,7 +293,7 @@ export default function DashboardPage() {
             
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
-                <span className="text-[10px] font-bold uppercase text-amber-400">Editing Individual Pass</span>
+                <span className="text-[10px] font-bold uppercase text-amber-400">Editing Database Pass</span>
                 <h2 className="text-xl font-black text-white">Pass #{editingMemberPass.member.pass_no}</h2>
               </div>
               <button 
@@ -362,7 +369,7 @@ export default function DashboardPage() {
                   saveStatus === 'saving' ? 'bg-amber-500/50 text-slate-950 cursor-wait' : 'bg-amber-500 active:bg-amber-400 text-slate-950'
                 }`}
               >
-                {saveStatus === 'saving' ? 'Saving...' : 'Save Changes'}
+                {saveStatus === 'saving' ? 'Saving to Database...' : 'Save Changes'}
               </button>
             </form>
 
