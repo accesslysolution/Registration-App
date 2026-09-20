@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { RegistrationWithMembers, RegistrationMember, FreeEntry } from '@/types';
+import { RegistrationWithMembers, RegistrationMember } from '@/types';
 import { getFullRegistrations, getAttendanceForPass, getFreeEntries } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
 
@@ -54,11 +54,23 @@ export default function DashboardPage() {
     }
   };
 
-  // Summary Metrics calculations
+  // Summary Metrics calculations with partial payment support
   const totalBookings = registrations.length;
   const totalPasses = registrations.reduce((acc, g) => acc + g.members.length, 0);
-  const totalCollected = registrations.filter((g) => g.paid).reduce((acc, g) => acc + g.total, 0);
-  const pendingCount = registrations.filter((g) => !g.paid).length;
+  
+  const totalCollected = registrations.reduce((acc, g) => {
+    const paidAmt = g.paid_amount ?? (g.paid ? g.total : 0);
+    return acc + paidAmt;
+  }, 0);
+
+  const pendingBookingsList = useMemo(() => {
+    return registrations.filter((g) => {
+      const paidAmt = g.paid_amount ?? (g.paid ? g.total : 0);
+      return paidAmt < g.total;
+    });
+  }, [registrations]);
+
+  const pendingCount = pendingBookingsList.length;
 
   // Flatten all members for individual pass search & listing
   const allMembersList = useMemo(() => {
@@ -102,11 +114,16 @@ export default function DashboardPage() {
 
       if (memberError) throw memberError;
 
-      // 2. Update group payment status & mode in Supabase database table
+      // 2. Update group payment status, paid amount, & mode in Supabase database table
+      const groupTotal = editingMemberPass.group.total;
+      const isPaidFull = editingMemberPass.group.paid;
+      const resolvedPaidAmt = isPaidFull ? groupTotal : (editingMemberPass.group.paid_amount ?? 0);
+
       const { error: groupError } = await supabase
         .from('registration_groups')
         .update({
-          paid: editingMemberPass.group.paid,
+          paid: isPaidFull,
+          paid_amount: resolvedPaidAmt,
           payment_mode: editingMemberPass.group.payment_mode,
         })
         .eq('id', editingMemberPass.group.id);
@@ -132,10 +149,11 @@ export default function DashboardPage() {
       let csvContent = 'data:text/csv;charset=utf-8,';
       
       if (type === 'registrations') {
-        csvContent += 'PassNumber,Name,Phone,PassType,PaymentMode,IsPaid,BookingTotal,CreatedBy,CreatedAt\n';
+        csvContent += 'PassNumber,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
         registrations.forEach((group) => {
+          const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
           group.members.forEach((m) => {
-            csvContent += `${m.pass_no},"${m.name}",${m.phone},${group.pass_type},${group.payment_mode},${group.paid},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
+            csvContent += `${m.pass_no},"${m.name}",${m.phone},${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
           });
         });
       } else if (type === 'attendance') {
@@ -223,6 +241,57 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* PENDING BALANCES & PARTIAL PAYMENTS SECTION */}
+      {!loading && pendingBookingsList.length > 0 && (
+        <div className="space-y-3 mb-6 bg-rose-950/20 border border-rose-500/30 p-4 rounded-3xl">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+              <span>⚠️</span> Pending Balances ({pendingBookingsList.length})
+            </h2>
+            <span className="text-[10px] text-slate-400">Tap to review & clear</span>
+          </div>
+
+          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+            {pendingBookingsList.map((group) => {
+              const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
+              const dueAmt = Math.max(0, group.total - paidAmt);
+              const primaryMember = group.members[0];
+
+              return (
+                <div
+                  key={group.id}
+                  onClick={() => {
+                    if (primaryMember) {
+                      setEditingMemberPass({ member: { ...primaryMember }, group: { ...group } });
+                    }
+                  }}
+                  className="bg-slate-900 border border-rose-900/50 hover:border-rose-500 p-3 rounded-2xl flex items-center justify-between cursor-pointer transition-all active:scale-[0.99]"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-lg border border-rose-500/30">
+                        {group.persons} {group.persons === 1 ? 'Person' : 'Persons'}
+                      </span>
+                      <span className="font-bold text-white text-sm">
+                        {primaryMember ? primaryMember.name : 'Group Booking'}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400 block mt-0.5 font-mono">
+                      {primaryMember ? `+91 ${primaryMember.phone}` : ''} • Pass #{primaryMember?.pass_no || 'N/A'}
+                    </span>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-xs font-black text-rose-400 block">Due: ₹{dueAmt}</span>
+                    <span className="text-[10px] text-slate-400 block">Paid: ₹{paidAmt} / ₹{group.total}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Search Input */}
       <div className="space-y-3 mb-6">
         <div className="relative">
@@ -254,34 +323,41 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="space-y-2.5">
-            {filteredMembers.map(({ member, group }) => (
-              <div
-                key={member.pass_no}
-                onClick={() => setEditingMemberPass({ member: { ...member }, group: { ...group } })}
-                className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-2xl shadow-md transition-all active:scale-[0.99] cursor-pointer flex items-center justify-between"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-lg border border-amber-500/30">
-                      #{member.pass_no}
-                    </span>
-                    <h3 className="font-bold text-white text-sm">{member.name}</h3>
-                  </div>
-                  <div className="text-xs text-slate-400 flex gap-2">
-                    <span>+91 {member.phone}</span>
-                    <span>•</span>
-                    <span className="uppercase">{group.pass_type}</span>
-                  </div>
-                </div>
+            {filteredMembers.map(({ member, group }) => {
+              const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
+              const isFullyPaid = paidAmt >= group.total;
+              const statusLabel = isFullyPaid ? 'PAID' : paidAmt > 0 ? 'PARTIAL' : 'PENDING';
+              const badgeColor = isFullyPaid ? 'bg-emerald-500/20 text-emerald-400' : paidAmt > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400';
 
-                <div className="text-right space-y-1">
-                  <span className="text-xs font-bold text-slate-300 block">₹{group.total}</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${group.paid ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                    {group.paid ? 'PAID' : 'PENDING'}
-                  </span>
+              return (
+                <div
+                  key={member.pass_no}
+                  onClick={() => setEditingMemberPass({ member: { ...member }, group: { ...group } })}
+                  className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-2xl shadow-md transition-all active:scale-[0.99] cursor-pointer flex items-center justify-between"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-lg border border-amber-500/30">
+                        #{member.pass_no}
+                      </span>
+                      <h3 className="font-bold text-white text-sm">{member.name}</h3>
+                    </div>
+                    <div className="text-xs text-slate-400 flex gap-2">
+                      <span>+91 {member.phone}</span>
+                      <span>•</span>
+                      <span className="uppercase">{group.pass_type}</span>
+                    </div>
+                  </div>
+
+                  <div className="text-right space-y-1">
+                    <span className="text-xs font-bold text-slate-300 block">₹{group.total}</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${badgeColor}`}>
+                      {statusLabel}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -332,13 +408,47 @@ export default function DashboardPage() {
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Paid Amount (₹)</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-400 font-bold">₹</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={editingMemberPass.group.paid_amount ?? (editingMemberPass.group.paid ? editingMemberPass.group.total : 0)}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0;
+                      const total = editingMemberPass.group.total;
+                      setEditingMemberPass({
+                        ...editingMemberPass,
+                        group: {
+                          ...editingMemberPass.group,
+                          paid_amount: val,
+                          paid: val >= total
+                        }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-3 text-sm text-white focus:border-amber-500 focus:outline-none font-mono font-bold"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400 block">Total Group Booking Total: ₹{editingMemberPass.group.total}</span>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setEditingMemberPass({
-                    ...editingMemberPass,
-                    group: { ...editingMemberPass.group, paid: !editingMemberPass.group.paid }
-                  })}
+                  onClick={() => {
+                    const total = editingMemberPass.group.total;
+                    const nextPaid = !editingMemberPass.group.paid;
+                    setEditingMemberPass({
+                      ...editingMemberPass,
+                      group: {
+                        ...editingMemberPass.group,
+                        paid: nextPaid,
+                        paid_amount: nextPaid ? total : 0
+                      }
+                    });
+                  }}
                   className={`py-3 rounded-xl font-bold text-xs border ${editingMemberPass.group.paid ? 'bg-emerald-950 text-emerald-400 border-emerald-500/40' : 'bg-rose-950 text-rose-400 border-rose-500/40'}`}
                 >
                   Status: {editingMemberPass.group.paid ? 'PAID' : 'PENDING'}

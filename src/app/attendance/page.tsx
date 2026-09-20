@@ -5,9 +5,6 @@ import { RegistrationMember, PassType, RegistrationGroup } from '@/types';
 import { getRegistrationMembers, getRegistrationGroups, getAttendanceForPass, markAttendance } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
 
-// Active event date ID for today's scans (matches settings/storage)
-const CURRENT_EVENT_DATE_ID = 'd4';
-
 type AttendanceStatusType = 
   | 'NOT_FOUND' 
   | 'INVALID_DATE' 
@@ -34,6 +31,15 @@ export default function AttendancePage() {
   
   const inputRef = useRef<HTMLInputElement>(null);
   const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
+
+  // Automatically determine today's event date string (Format: YYYY-MM-DD ensures daily reset/isolation)
+  const todayEventDateId = new Date().toISOString().split('T')[0];
+
+  const formattedDisplayDate = new Date().toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 
   // Auto-focus input on mount
   useEffect(() => {
@@ -86,22 +92,25 @@ export default function AttendancePage() {
       const relatedMembers = members.filter((m) => m.group_id === member.group_id);
       setGroupMembers(relatedMembers);
 
-      // Validate Per-Day pass for today's event date
-      if (passType === 'per-day' && (!validDates || !validDates.includes(CURRENT_EVENT_DATE_ID))) {
-        setEvalResult({
-          status: 'INVALID_DATE',
-          member,
-          group,
-          passType,
-          validDates,
-        });
-        triggerVibration('error');
-        setLoading(false);
-        return;
+      // Validate Per-Day pass for today's event date if applicable
+      if (passType === 'per-day' && validDates && validDates.length > 0) {
+        const isDateAllowed = validDates.includes(todayEventDateId) || validDates.some(d => todayEventDateId.includes(d));
+        if (!isDateAllowed) {
+          setEvalResult({
+            status: 'INVALID_DATE',
+            member,
+            group,
+            passType,
+            validDates,
+          });
+          triggerVibration('error');
+          setLoading(false);
+          return;
+        }
       }
 
-      // Check live attendance table in Supabase for today's entry
-      const attendanceLog = await getAttendanceForPass(member.pass_no, CURRENT_EVENT_DATE_ID);
+      // Check live attendance table in Supabase for TODAY'S entry specifically
+      const attendanceLog = await getAttendanceForPass(member.pass_no, todayEventDateId);
       
       if (attendanceLog) {
         const lastEntryTime = new Date(attendanceLog.marked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -162,7 +171,7 @@ export default function AttendancePage() {
     }
   };
 
-  // Handle Marking Attendance in Supabase Database (1 Pass = 1 Person)
+  // Handle Marking Daily Attendance in Supabase Database
   const handleMarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
@@ -171,7 +180,8 @@ export default function AttendancePage() {
     setErrorMessage('');
 
     try {
-      const res = await markAttendance(passNo, CURRENT_EVENT_DATE_ID, staffName);
+      // Passes current dynamic daily date ID so entries reset automatically on date change
+      const res = await markAttendance(passNo, todayEventDateId, staffName);
 
       if (!res.success) {
         setActionStatus('error');
@@ -196,7 +206,7 @@ export default function AttendancePage() {
     }
   };
 
-  // Handle Unmarking / Undoing Attendance Entry directly in Supabase Database
+  // Handle Unmarking / Undoing Today's Attendance Entry
   const handleUnmarkPresent = async () => {
     if (!evalResult || !evalResult.member) return;
     const passNo = evalResult.member.pass_no;
@@ -209,7 +219,7 @@ export default function AttendancePage() {
         .from('attendance')
         .delete()
         .eq('pass_no', passNo)
-        .eq('event_date', CURRENT_EVENT_DATE_ID);
+        .eq('event_date', todayEventDateId);
 
       if (error) throw error;
 
@@ -258,11 +268,11 @@ export default function AttendancePage() {
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
         <div>
           <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Terminal & Pass Desk</span>
-          <h1 className="text-2xl font-black tracking-tight text-white">Lookup & Attendance</h1>
+          <h1 className="text-2xl font-black tracking-tight text-white">Live Attendance</h1>
         </div>
         <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-right">
-          <span className="text-[10px] uppercase text-slate-400 block">Event Date</span>
-          <span className="text-xs font-bold text-amber-400">Day 4 (Sep 25)</span>
+          <span className="text-[10px] uppercase text-slate-400 block">Today's Date</span>
+          <span className="text-xs font-bold text-amber-400">{formattedDisplayDate}</span>
         </div>
       </div>
 
@@ -447,13 +457,13 @@ export default function AttendancePage() {
             ⚠️
           </div>
           <div>
-            <span className="text-xs font-bold uppercase tracking-widest text-amber-400 block mb-1">Already Inside</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-amber-400 block mb-1">Already Entered Today</span>
             <h2 className="text-3xl font-black text-white">#{evalResult.member.pass_no}</h2>
             <p className="text-xl font-bold text-amber-400 mt-1">{evalResult.member.name}</p>
           </div>
 
           <div className="bg-slate-950/70 p-3 rounded-2xl border border-amber-900/60 text-xs text-slate-300">
-            Already entered today at <strong className="text-amber-400 font-mono">{evalResult.lastEntryTime}</strong>
+            Checked in today at <strong className="text-amber-400 font-mono">{evalResult.lastEntryTime}</strong>
           </div>
 
           <div className="grid grid-cols-2 gap-3 pt-2">

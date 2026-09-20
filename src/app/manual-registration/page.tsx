@@ -3,15 +3,27 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PassType, PaymentMode, RegistrationWithMembers } from '@/types';
 import { addRegistration, getNextPassNo } from '@/lib/storage';
-import { 
-  getRatesForGroupSize, 
-  calculatePassTotal, 
-  MOCK_GARBA_DATES 
-} from '@/config/pricing';
+import { getRatesForGroupSize } from '@/config/pricing';
 import Link from 'next/link';
 
 type SaveStatus = 'idle' | 'saving' | 'success' | 'error';
 type PaymentStatusType = 'full' | 'partial' | 'pending';
+
+const FIXED_PER_DAY_RATE = 300;
+
+// Event dates from Sep 27 to Oct 6 (2026) with Day and Date label
+const GARBA_EVENT_DATES = [
+  { id: 'd1', label: 'Sun, Sep 27' },
+  { id: 'd2', label: 'Mon, Sep 28' },
+  { id: 'd3', label: 'Tue, Sep 29' },
+  { id: 'd4', label: 'Wed, Sep 30' },
+  { id: 'd5', label: 'Thu, Oct 1' },
+  { id: 'd6', label: 'Fri, Oct 2' },
+  { id: 'd7', label: 'Sat, Oct 3' },
+  { id: 'd8', label: 'Sun, Oct 4' },
+  { id: 'd9', label: 'Mon, Oct 5' },
+  { id: 'd10', label: 'Tue, Oct 6' },
+];
 
 export default function ManualRegistrationPage() {
   const [nextPassNo, setNextPassNo] = useState<number>(1);
@@ -64,7 +76,7 @@ export default function ManualRegistrationPage() {
 
   // Standard fallback rates
   const standardRates = useMemo(() => getRatesForGroupSize(persons), [persons]);
-  const defaultStandardRate = passType === 'full-season' ? standardRates.fullSeasonRate : standardRates.perDayRate;
+  const defaultStandardRate = passType === 'full-season' ? standardRates.fullSeasonRate : FIXED_PER_DAY_RATE;
 
   // Final resolved rate per person (Manual input or default)
   const resolvedRatePerPerson = useMemo(() => {
@@ -74,10 +86,15 @@ export default function ManualRegistrationPage() {
     return defaultStandardRate;
   }, [ratePerPersonInput, defaultStandardRate]);
 
-  // Final Total calculation (Persons × Resolved Rate Per Person)
+  // Final Total calculation
   const finalTotal = useMemo(() => {
-    return persons * resolvedRatePerPerson;
-  }, [persons, resolvedRatePerPerson]);
+    if (passType === 'full-season') {
+      return persons * resolvedRatePerPerson;
+    } else {
+      // Per day: Manual or fixed rate × persons × selected dates count
+      return persons * resolvedRatePerPerson * Math.max(1, selectedDates.length);
+    }
+  }, [passType, persons, resolvedRatePerPerson, selectedDates]);
 
   // Resolved Paid Amount & IsPaid flag based on selection type
   const resolvedPaidAmount = useMemo(() => {
@@ -224,7 +241,7 @@ export default function ManualRegistrationPage() {
               Number of Persons
             </label>
             <span className="text-xs bg-amber-500/10 text-amber-400 font-bold px-2.5 py-1 rounded-lg border border-amber-500/20">
-              Standard Tier: ₹{defaultStandardRate}/p
+              Standard: ₹{defaultStandardRate}{passType === 'per-day' ? '/p/day' : '/p'}
             </span>
           </div>
           
@@ -331,7 +348,7 @@ export default function ManualRegistrationPage() {
                   : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700'
               }`}
             >
-              Per Day
+              Per Day (₹300)
             </button>
           </div>
         </div>
@@ -340,13 +357,13 @@ export default function ManualRegistrationPage() {
           <div className="space-y-2 bg-slate-900/40 p-4 rounded-2xl border border-amber-500/30 animate-fadeIn">
             <div className="flex justify-between items-center mb-2">
               <label className="block text-xs font-bold uppercase tracking-wider text-amber-400">
-                Select Specific Dates <span className="text-rose-500">*</span>
+                Select Event Dates (Sep 27 - Oct 6) <span className="text-rose-500">*</span>
               </label>
               <span className="text-xs text-slate-400 font-semibold">{selectedDates.length} selected</span>
             </div>
             
             <div className="flex flex-wrap gap-2">
-              {MOCK_GARBA_DATES.map((d) => {
+              {GARBA_EVENT_DATES.map((d) => {
                 const isSelected = selectedDates.includes(d.id);
                 return (
                   <button
@@ -354,7 +371,7 @@ export default function ManualRegistrationPage() {
                     type="button"
                     disabled={saveStatus === 'saving'}
                     onClick={() => toggleDate(d.id)}
-                    className={`px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all border active:scale-95 ${
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-all border active:scale-95 ${
                       isSelected
                         ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md'
                         : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
@@ -387,7 +404,7 @@ export default function ManualRegistrationPage() {
             />
           </div>
           <span className="text-[10px] text-slate-400 block">
-            Leave blank to use standard tier rate (₹{defaultStandardRate}/person).
+            Leave blank to use standard tier rate (₹{defaultStandardRate}/person{passType === 'per-day' ? '/day' : ''}).
           </span>
         </div>
 
@@ -487,6 +504,7 @@ export default function ManualRegistrationPage() {
             <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Total Calculation</span>
             <div className="text-xs text-slate-300 font-medium">
               {persons} {persons === 1 ? 'person' : 'persons'} × ₹{resolvedRatePerPerson}
+              {passType === 'per-day' ? ` × ${selectedDates.length} days` : ''}
             </div>
           </div>
           <div className="text-right">
