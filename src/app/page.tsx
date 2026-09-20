@@ -20,7 +20,7 @@ export default function HomePage() {
         {currentTab === 'free-entry' && <FreeEntryPage />}
         {currentTab === 'dashboard' && <DashboardPage />}
       </div>
-      <BottomNav activeTab={currentTab} onTabChange={setCurrentTab} />
+      <BottomNav />
     </div>
   );
 }
