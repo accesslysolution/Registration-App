@@ -11,6 +11,7 @@ import {
 import Link from 'next/link';
 
 type SaveStatus = 'idle' | 'saving' | 'success' | 'error';
+type PaymentStatusType = 'full' | 'partial' | 'pending';
 
 export default function RegistrationPage() {
   const [nextPassNo, setNextPassNo] = useState<number>(1);
@@ -23,7 +24,10 @@ export default function RegistrationPage() {
   const [passType, setPassType] = useState<PassType>('full-season');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('cash');
-  const [isPaid, setIsPaid] = useState<boolean>(true);
+  
+  // Payment Status & Partial Amount State
+  const [paymentStatusType, setPaymentStatusType] = useState<PaymentStatusType>('full');
+  const [paidAmountInput, setPaidAmountInput] = useState<string>('');
 
   // Save / Network states
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
@@ -63,6 +67,15 @@ export default function RegistrationPage() {
   const liveTotal = useMemo(() => {
     return calculatePassTotal(passType === 'full-season' ? 'full_season' : 'per_day', persons, selectedDates.length);
   }, [passType, persons, selectedDates]);
+
+  // Resolved Paid Amount & IsPaid flag based on selection type
+  const resolvedPaidAmount = useMemo(() => {
+    if (paymentStatusType === 'full') return liveTotal;
+    if (paymentStatusType === 'pending') return 0;
+    return parseFloat(paidAmountInput) || 0;
+  }, [paymentStatusType, liveTotal, paidAmountInput]);
+
+  const isFullyPaid = paymentStatusType === 'full' || resolvedPaidAmount >= liveTotal;
 
   // Handlers for Group Size Stepper
   const handleDecrementPersons = () => setPersons((prev) => Math.max(1, prev - 1));
@@ -129,8 +142,9 @@ export default function RegistrationPage() {
           persons,
           rate: currentRatePerPerson,
           total: liveTotal,
+          paid_amount: resolvedPaidAmount,
           payment_mode: paymentMode,
-          paid: isPaid,
+          paid: isFullyPaid,
           created_by: staffName,
         },
         members
@@ -159,7 +173,8 @@ export default function RegistrationPage() {
     setPassType('full-season');
     setSelectedDates([]);
     setPaymentMode('cash');
-    setIsPaid(true);
+    setPaymentStatusType('full');
+    setPaidAmountInput('');
     setMemberErrors([]);
     setDatesError(null);
     setSaveStatus('idle');
@@ -347,8 +362,8 @@ export default function RegistrationPage() {
           </div>
         )}
 
-        {/* 5. Payment Mode & Paid Status Toggles */}
-        <div className="grid grid-cols-2 gap-4 pt-2">
+        {/* 5. Payment Mode & Payment Status Toggles (Full, Partial, Pending) */}
+        <div className="space-y-4 pt-2">
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Payment Mode</label>
             <div className="grid grid-cols-2 gap-2">
@@ -377,35 +392,70 @@ export default function RegistrationPage() {
 
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Payment Status</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 disabled={saveStatus === 'saving'}
-                onClick={() => setIsPaid(true)}
-                className={`py-3 rounded-xl font-bold text-sm border transition-all ${
-                  isPaid ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50' : 'bg-slate-900/60 text-slate-500 border-slate-800'
+                onClick={() => { setPaymentStatusType('full'); setPaidAmountInput(''); }}
+                className={`py-3 rounded-xl font-bold text-xs border transition-all ${
+                  paymentStatusType === 'full' ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50' : 'bg-slate-900/60 text-slate-500 border-slate-800'
                 }`}
               >
-                Paid
+                Paid (Full)
               </button>
               <button
                 type="button"
                 disabled={saveStatus === 'saving'}
-                onClick={() => setIsPaid(false)}
-                className={`py-3 rounded-xl font-bold text-sm border transition-all ${
-                  !isPaid ? 'bg-rose-950/80 text-rose-400 border-rose-500/50' : 'bg-slate-900/60 text-slate-500 border-slate-800'
+                onClick={() => setPaymentStatusType('partial')}
+                className={`py-3 rounded-xl font-bold text-xs border transition-all ${
+                  paymentStatusType === 'partial' ? 'bg-amber-950/80 text-amber-400 border-amber-500/50' : 'bg-slate-900/60 text-slate-500 border-slate-800'
+                }`}
+              >
+                Partial
+              </button>
+              <button
+                type="button"
+                disabled={saveStatus === 'saving'}
+                onClick={() => { setPaymentStatusType('pending'); setPaidAmountInput(''); }}
+                className={`py-3 rounded-xl font-bold text-xs border transition-all ${
+                  paymentStatusType === 'pending' ? 'bg-rose-950/80 text-rose-400 border-rose-500/50' : 'bg-slate-900/60 text-slate-500 border-slate-800'
                 }`}
               >
                 Pending
               </button>
             </div>
           </div>
+
+          {/* Conditional Partial Amount Input */}
+          {paymentStatusType === 'partial' && (
+            <div className="bg-slate-900 border border-amber-500/40 p-4 rounded-2xl space-y-2 animate-fadeIn">
+              <label className="text-xs font-bold uppercase tracking-wide text-amber-400 block">
+                Enter Amount Received (₹)
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-amber-400 font-bold text-lg">₹</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={paidAmountInput}
+                  onChange={(e) => setPaidAmountInput(e.target.value)}
+                  onWheel={(e) => e.currentTarget.blur()}
+                  placeholder={`Total is ₹${liveTotal}`}
+                  className="w-full bg-slate-950 border border-amber-500/60 rounded-xl pl-10 pr-4 py-3 text-lg font-black text-amber-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+              <div className="flex justify-between text-[11px] text-slate-400 pt-1">
+                <span>Total: ₹{liveTotal}</span>
+                <span className="text-rose-400 font-bold">Balance Due: ₹{Math.max(0, liveTotal - resolvedPaidAmount)}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Live Calculation Banner */}
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between shadow-xl mt-6">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Calculation</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Summary</span>
             <div className="text-xs text-slate-300 font-medium">
               {persons} {persons === 1 ? 'pass' : 'passes'} × ₹{currentRatePerPerson}
               {passType === 'per-day' ? ` × ${selectedDates.length} days` : ''}
@@ -413,6 +463,9 @@ export default function RegistrationPage() {
           </div>
           <div className="text-right">
             <span className="text-2xl font-black text-amber-400">₹{liveTotal}</span>
+            {paymentStatusType === 'partial' && (
+              <span className="text-[10px] text-emerald-400 block font-bold">Paid: ₹{resolvedPaidAmount}</span>
+            )}
           </div>
         </div>
 
@@ -444,7 +497,7 @@ export default function RegistrationPage() {
 
       </form>
 
-      {/* FULL-SCREEN CONFIRMATION MODAL CARD (Lists all assigned individual pass numbers) */}
+      {/* FULL-SCREEN CONFIRMATION MODAL CARD */}
       {confirmedBooking && (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-slate-900 border-2 border-amber-500 w-full max-w-[390px] rounded-3xl p-6 shadow-2xl text-center space-y-5 relative overflow-hidden max-h-[90vh] flex flex-col">
@@ -458,7 +511,6 @@ export default function RegistrationPage() {
             <div>
               <span className="text-xs font-bold uppercase tracking-widest text-amber-400 block mb-0.5">Registration Successful</span>
               <h2 className="text-2xl font-black text-white tracking-tight">{confirmedBooking.persons} Passes Generated</h2>
-              <span className="text-[11px] text-slate-400 block mt-0.5">Each person has their own unique pass number</span>
             </div>
 
             {/* List of assigned passes */}
@@ -476,8 +528,11 @@ export default function RegistrationPage() {
             </div>
 
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 flex justify-between items-center shrink-0">
-              <span className="text-xs uppercase font-bold text-amber-400">Total Booking Amount</span>
-              <span className="text-xl font-black text-amber-400">₹{confirmedBooking.total}</span>
+              <div className="text-left">
+                <span className="text-[10px] uppercase font-bold text-amber-400 block">Total: ₹{confirmedBooking.total}</span>
+                <span className="text-xs font-bold text-emerald-400">Paid: ₹{confirmedBooking.paid_amount ?? (confirmedBooking.paid ? confirmedBooking.total : 0)}</span>
+              </div>
+              <span className="text-xl font-black text-rose-400">Due: ₹{Math.max(0, confirmedBooking.total - (confirmedBooking.paid_amount ?? (confirmedBooking.paid ? confirmedBooking.total : 0)))}</span>
             </div>
 
             <button

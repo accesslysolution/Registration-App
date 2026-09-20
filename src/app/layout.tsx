@@ -130,7 +130,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         ) : (
           <div className="min-h-screen flex flex-col max-w-[430px] mx-auto bg-slate-950 relative pb-safe">
             <Header staffName={loggedStaff.name} onLogout={handleLogout} />
-            <div className="flex-1 pt-16 pb-20">{children}</div>
+            <div className="flex-1 pt-16 pb-24">{children}</div>
+            <BottomNav />
           </div>
         )}
 

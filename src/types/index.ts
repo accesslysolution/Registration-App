@@ -8,6 +8,7 @@ export interface RegistrationGroup {
   persons: number;
   rate: number;
   total: number;
+  paid_amount?: number; // Added for partial payment amount tracking
   payment_mode: PaymentMode;
   paid: boolean;
   created_by?: string;
