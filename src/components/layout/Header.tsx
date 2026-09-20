@@ -8,13 +8,19 @@ interface HeaderProps {
 }
 
 export default function Header({ staffName, onLogout }: HeaderProps) {
+  const currentDate = new Date().toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
   return (
     <header className="fixed top-0 left-0 right-0 max-w-[430px] mx-auto bg-slate-950/95 backdrop-blur-md border-b border-slate-800 z-40 px-4 h-16 flex items-center justify-between pt-safe">
       <div className="flex items-center gap-2">
         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
         <div>
           <span className="text-[10px] uppercase font-bold text-slate-400 block">Staff: {staffName}</span>
-          <span className="text-xs font-black text-amber-400">Day 4 (Sep 25)</span>
+          <span className="text-xs font-black text-amber-400">{currentDate}</span>
         </div>
       </div>
       <button
