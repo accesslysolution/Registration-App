@@ -11,7 +11,7 @@ type PaymentStatusType = 'full' | 'partial' | 'pending';
 
 const FIXED_PER_DAY_RATE = 300;
 
-// Event dates from Sep 27 to Oct 6 with Day and Date label
+// Event dates from Sep 27 to Oct 6 (2026) with Day and Date label
 const GARBA_EVENT_DATES = [
   { id: 'd1', label: 'Sun, Sep 27' },
   { id: 'd2', label: 'Mon, Sep 28' },
@@ -25,7 +25,7 @@ const GARBA_EVENT_DATES = [
   { id: 'd10', label: 'Tue, Oct 6' },
 ];
 
-export default function ManualRegistrationPage() {
+export default function RegistrationPage() {
   const [nextPassNo, setNextPassNo] = useState<number>(1);
 
   // Form State
@@ -41,14 +41,12 @@ export default function ManualRegistrationPage() {
   const [paymentStatusType, setPaymentStatusType] = useState<PaymentStatusType>('full');
   const [paidAmountInput, setPaidAmountInput] = useState<string>('');
 
-  // Direct Manual Rate Per Person State
-  const [ratePerPersonInput, setRatePerPersonInput] = useState<string>('');
-
   // Save / Network states
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [datesError, setDatesError] = useState<string | null>(null);
 
+  // Full-screen confirmation card state for multi-member booking
   const [confirmedBooking, setConfirmedBooking] = useState<RegistrationWithMembers | null>(null);
 
   const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
@@ -61,7 +59,7 @@ export default function ManualRegistrationPage() {
     fetchNextPass();
   }, []);
 
-  // Sync members array length with 'persons' stepper
+  // Sync members array length and error state with 'persons' stepper
   useEffect(() => {
     setMembers((prev) => {
       if (prev.length === persons) return prev;
@@ -74,37 +72,31 @@ export default function ManualRegistrationPage() {
     setMemberErrors((prev) => prev.slice(0, persons));
   }, [persons]);
 
-  // Standard fallback rates
-  const standardRates = useMemo(() => getRatesForGroupSize(persons), [persons]);
-  const defaultStandardRate = passType === 'full-season' ? standardRates.fullSeasonRate : FIXED_PER_DAY_RATE;
-
-  // Final resolved rate per person (Manual input or default)
-  const resolvedRatePerPerson = useMemo(() => {
-    if (ratePerPersonInput !== '') {
-      return parseFloat(ratePerPersonInput) || 0;
-    }
-    return defaultStandardRate;
-  }, [ratePerPersonInput, defaultStandardRate]);
-
-  // Final Total calculation
-  const finalTotal = useMemo(() => {
+  // Live calculations using shared config module
+  const rates = useMemo(() => getRatesForGroupSize(persons), [persons]);
+  
+  // Current rate per person for display/storage
+  const currentRatePerPerson = passType === 'full-season' ? rates.fullSeasonRate : FIXED_PER_DAY_RATE;
+  
+  const liveTotal = useMemo(() => {
     if (passType === 'full-season') {
-      return persons * resolvedRatePerPerson;
+      return persons * rates.fullSeasonRate;
     } else {
-      // Per day: Manual or fixed rate × persons × selected dates count
-      return persons * resolvedRatePerPerson * Math.max(1, selectedDates.length);
+      // Per day: ₹300 * number of persons * number of selected dates
+      return persons * FIXED_PER_DAY_RATE * Math.max(1, selectedDates.length);
     }
-  }, [passType, persons, resolvedRatePerPerson, selectedDates]);
+  }, [passType, persons, selectedDates, rates]);
 
   // Resolved Paid Amount & IsPaid flag based on selection type
   const resolvedPaidAmount = useMemo(() => {
-    if (paymentStatusType === 'full') return finalTotal;
+    if (paymentStatusType === 'full') return liveTotal;
     if (paymentStatusType === 'pending') return 0;
     return parseFloat(paidAmountInput) || 0;
-  }, [paymentStatusType, finalTotal, paidAmountInput]);
+  }, [paymentStatusType, liveTotal, paidAmountInput]);
 
-  const isFullyPaid = paymentStatusType === 'full' || resolvedPaidAmount >= finalTotal;
+  const isFullyPaid = paymentStatusType === 'full' || resolvedPaidAmount >= liveTotal;
 
+  // Handlers for Group Size Stepper
   const handleDecrementPersons = () => setPersons((prev) => Math.max(1, prev - 1));
   const handleIncrementPersons = () => setPersons((prev) => prev + 1);
 
@@ -120,6 +112,7 @@ export default function ManualRegistrationPage() {
     });
   };
 
+  // Date Chip Toggle
   const toggleDate = (dateId: string) => {
     setDatesError(null);
     setSelectedDates((prev) => 
@@ -127,6 +120,7 @@ export default function ManualRegistrationPage() {
     );
   };
 
+  // Submit and Save using Supabase backend storage layer
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let isValid = true;
@@ -165,13 +159,12 @@ export default function ManualRegistrationPage() {
           pass_type: passType,
           valid_dates: selectedDates,
           persons,
-          rate: resolvedRatePerPerson,
-          total: finalTotal,
+          rate: currentRatePerPerson,
+          total: liveTotal,
           paid_amount: resolvedPaidAmount,
           payment_mode: paymentMode,
           paid: isFullyPaid,
           created_by: staffName,
-          is_manual: true, // Tagged explicitly for accurate accounting tallying
         },
         members
       );
@@ -192,6 +185,7 @@ export default function ManualRegistrationPage() {
     }
   };
 
+  // Reset form for next entry after confirmation
   const handleResetForNext = async () => {
     setPersons(1);
     setMembers([{ name: '', phone: '' }]);
@@ -200,7 +194,6 @@ export default function ManualRegistrationPage() {
     setPaymentMode('cash');
     setPaymentStatusType('full');
     setPaidAmountInput('');
-    setRatePerPersonInput('');
     setMemberErrors([]);
     setDatesError(null);
     setSaveStatus('idle');
@@ -215,33 +208,44 @@ export default function ManualRegistrationPage() {
       {/* Top Header info */}
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
         <div>
-          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Terminal (Manual Price)</span>
-          <h1 className="text-2xl font-black tracking-tight text-white">Custom Registration</h1>
+          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Gate Terminal</span>
+          <h1 className="text-2xl font-black tracking-tight text-white">New Registration</h1>
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className="bg-slate-900 border border-amber-500/40 px-3 py-1.5 rounded-xl text-right shadow-lg">
             <span className="text-[10px] uppercase text-slate-400 block">Starting Pass</span>
             <span className="text-xl font-black text-amber-400">#{nextPassNo}</span>
           </div>
-          <Link 
-            href="/registration" 
-            className="text-[11px] font-bold text-amber-400 hover:underline flex items-center gap-0.5 pt-0.5"
-          >
-            <span>← Standard Pricing</span>
-          </Link>
+          <div className="flex items-center gap-2 pt-0.5">
+            <Link 
+              href="/groups" 
+              className="text-[11px] font-bold text-amber-400 hover:underline flex items-center gap-0.5"
+            >
+              <span>View Groups</span>
+              <span>↗</span>
+            </Link>
+            <span className="text-slate-700">•</span>
+            <Link 
+              href="/manual-registration" 
+              className="text-[11px] font-bold text-amber-400 hover:underline flex items-center gap-0.5"
+            >
+              <span>Manual Pricing</span>
+              <span>↗</span>
+            </Link>
+          </div>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         
-        {/* Number of Persons (Stepper) */}
+        {/* 1. Number of Persons (Stepper) */}
         <div className="space-y-2 bg-slate-900/60 border border-slate-800/80 p-4 rounded-2xl">
           <div className="flex justify-between items-center mb-1">
             <label className="block text-sm font-bold uppercase tracking-wide text-slate-300">
               Number of Persons
             </label>
             <span className="text-xs bg-amber-500/10 text-amber-400 font-bold px-2.5 py-1 rounded-lg border border-amber-500/20">
-              Standard: ₹{defaultStandardRate}{passType === 'per-day' ? '/p/day' : '/p'}
+              Rate: ₹{currentRatePerPerson}{passType === 'per-day' ? '/p/day' : '/p'}
             </span>
           </div>
           
@@ -271,7 +275,7 @@ export default function ManualRegistrationPage() {
           </div>
         </div>
 
-        {/* Dynamic Individual Attendee Details Fields */}
+        {/* 2. Dynamic Individual Attendee Details Fields */}
         <div className="space-y-3">
           <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
             Individual Pass Details ({persons} {persons === 1 ? 'Person' : 'Persons'})
@@ -320,10 +324,10 @@ export default function ManualRegistrationPage() {
           })}
         </div>
 
-        {/* Pass Type Toggle */}
+        {/* 3. Pass Type Toggle */}
         <div className="space-y-2">
           <label className="block text-sm font-bold uppercase tracking-wide text-slate-300">
-            Pass Type
+            Pass Type (Shared for Group)
           </label>
           <div className="grid grid-cols-2 gap-3">
             <button
@@ -353,6 +357,7 @@ export default function ManualRegistrationPage() {
           </div>
         </div>
 
+        {/* 4. Conditional Date Chips Selector (if Per Day - Sep 27 to Oct 6) */}
         {passType === 'per-day' && (
           <div className="space-y-2 bg-slate-900/40 p-4 rounded-2xl border border-amber-500/30 animate-fadeIn">
             <div className="flex justify-between items-center mb-2">
@@ -386,29 +391,7 @@ export default function ManualRegistrationPage() {
           </div>
         )}
 
-        {/* DIRECT MANUAL RATE PER PERSON INPUT (Scroll-locked) */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-2">
-          <label className="text-xs font-bold uppercase tracking-wide text-amber-400 block">
-            Price Per Person (₹)
-          </label>
-          <div className="relative">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-amber-400 font-bold text-lg">₹</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={ratePerPersonInput}
-              onChange={(e) => setRatePerPersonInput(e.target.value)}
-              onWheel={(e) => e.currentTarget.blur()}
-              placeholder={`Standard default is ₹${defaultStandardRate}`}
-              className="w-full bg-slate-950 border border-amber-500/60 rounded-xl pl-10 pr-4 py-3 text-lg font-black text-amber-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            />
-          </div>
-          <span className="text-[10px] text-slate-400 block">
-            Leave blank to use standard tier rate (₹{defaultStandardRate}/person{passType === 'per-day' ? '/day' : ''}).
-          </span>
-        </div>
-
-        {/* Payment Mode & Payment Status Toggles (Full, Partial, Pending) */}
+        {/* 5. Payment Mode & Payment Status Toggles (Full, Partial, Pending) */}
         <div className="space-y-4 pt-2">
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Payment Mode</label>
@@ -486,13 +469,13 @@ export default function ManualRegistrationPage() {
                   value={paidAmountInput}
                   onChange={(e) => setPaidAmountInput(e.target.value)}
                   onWheel={(e) => e.currentTarget.blur()}
-                  placeholder={`Total is ₹${finalTotal}`}
+                  placeholder={`Total is ₹${liveTotal}`}
                   className="w-full bg-slate-950 border border-amber-500/60 rounded-xl pl-10 pr-4 py-3 text-lg font-black text-amber-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
               </div>
               <div className="flex justify-between text-[11px] text-slate-400 pt-1">
-                <span>Total: ₹{finalTotal}</span>
-                <span className="text-rose-400 font-bold">Balance Due: ₹{Math.max(0, finalTotal - resolvedPaidAmount)}</span>
+                <span>Total: ₹{liveTotal}</span>
+                <span className="text-rose-400 font-bold">Balance Due: ₹{Math.max(0, liveTotal - resolvedPaidAmount)}</span>
               </div>
             </div>
           )}
@@ -501,20 +484,21 @@ export default function ManualRegistrationPage() {
         {/* Live Calculation Banner */}
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between shadow-xl mt-6">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Total Calculation</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Summary</span>
             <div className="text-xs text-slate-300 font-medium">
-              {persons} {persons === 1 ? 'person' : 'persons'} × ₹{resolvedRatePerPerson}
+              {persons} {persons === 1 ? 'pass' : 'passes'} × ₹{currentRatePerPerson}
               {passType === 'per-day' ? ` × ${selectedDates.length} days` : ''}
             </div>
           </div>
           <div className="text-right">
-            <span className="text-2xl font-black text-amber-400">₹{finalTotal}</span>
+            <span className="text-2xl font-black text-amber-400">₹{liveTotal}</span>
             {paymentStatusType === 'partial' && (
               <span className="text-[10px] text-emerald-400 block font-bold">Paid: ₹{resolvedPaidAmount}</span>
             )}
           </div>
         </div>
 
+        {/* Error Banner with Retry */}
         {saveStatus === 'error' && (
           <div className="bg-rose-950 border border-rose-500 p-3 rounded-2xl flex items-center justify-between text-xs text-rose-300">
             <span>Failed: {errorMessage}</span>
@@ -522,6 +506,7 @@ export default function ManualRegistrationPage() {
           </div>
         )}
 
+        {/* Submit Big Action Button */}
         <button
           type="submit"
           disabled={saveStatus === 'saving'}
@@ -531,12 +516,17 @@ export default function ManualRegistrationPage() {
               : 'bg-amber-500 active:bg-amber-400 text-slate-950 border-amber-400 shadow-amber-500/25'
           }`}
         >
-          <span>{saveStatus === 'saving' ? 'Saving to Database...' : `Generate ${persons} Passes (₹${finalTotal})`}</span>
+          <span>{saveStatus === 'saving' ? 'Saving to Database...' : `Generate ${persons} Individual Passes`}</span>
+          {saveStatus !== 'saving' && (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+          )}
         </button>
 
       </form>
 
-      {/* Confirmation Modal */}
+      {/* FULL-SCREEN CONFIRMATION MODAL CARD */}
       {confirmedBooking && (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-slate-900 border-2 border-amber-500 w-full max-w-[390px] rounded-3xl p-6 shadow-2xl text-center space-y-5 relative overflow-hidden max-h-[90vh] flex flex-col">
@@ -552,8 +542,9 @@ export default function ManualRegistrationPage() {
               <h2 className="text-2xl font-black text-white tracking-tight">{confirmedBooking.persons} Passes Generated</h2>
             </div>
 
+            {/* List of assigned passes */}
             <div className="space-y-2 text-left overflow-y-auto pr-1 grow">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">Assigned Pass Numbers:</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Assigned Pass Numbers & Wristbands:</span>
               {confirmedBooking.members.map((m) => (
                 <div key={m.pass_no} className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
                   <div>
