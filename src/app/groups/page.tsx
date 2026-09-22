@@ -18,6 +18,7 @@ export default function GroupsPage() {
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberPhone, setNewMemberPhone] = useState('');
   const [addingMember, setAddingMember] = useState(false);
+  const [clearingPayment, setClearingPayment] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -59,8 +60,17 @@ export default function GroupsPage() {
     e.preventDefault();
     if (!selectedGroup) return;
 
-    if (!newMemberName.trim() || newMemberPhone.length !== 10) {
+    const cleanPhone = newMemberPhone.replace(/\D/g, '');
+
+    if (!newMemberName.trim() || cleanPhone.length !== 10) {
       setErrorMsg('Enter valid name and 10-digit phone');
+      return;
+    }
+
+    // CRITICAL: Check if this phone number already exists within THIS exact group
+    const isDuplicateInGroup = selectedGroup.members.some((m) => m.phone === cleanPhone);
+    if (isDuplicateInGroup) {
+      setErrorMsg('This phone number is already registered in this group!');
       return;
     }
 
@@ -79,7 +89,7 @@ export default function GroupsPage() {
         newRate = newTier.fullSeasonRate;
         newTotal = nextPersonsCount * newRate;
       } else {
-        // Per day fixed calculation
+        // Per day fixed calculation (₹300 per person per selected date)
         newTotal = nextPersonsCount * 300 * Math.max(1, selectedGroup.valid_dates.length);
       }
 
@@ -90,7 +100,7 @@ export default function GroupsPage() {
           {
             group_id: selectedGroup.id,
             name: newMemberName.trim(),
-            phone: newMemberPhone.replace(/\D/g, ''),
+            phone: cleanPhone,
           },
         ]);
 
@@ -127,6 +137,38 @@ export default function GroupsPage() {
       setErrorMsg(err.message || 'Failed to add member to group');
     } finally {
       setAddingMember(false);
+    }
+  };
+
+  // Handle instant payment clearance for the group ("Payment Done")
+  const handlePaymentDone = async () => {
+    if (!selectedGroup) return;
+
+    setClearingPayment(true);
+    setErrorMsg('');
+
+    try {
+      const { data: updatedGroup, error } = await supabase
+        .from('registration_groups')
+        .update({
+          paid_amount: selectedGroup.total,
+          paid: true,
+        })
+        .eq('id', selectedGroup.id)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      await fetchGroups();
+      if (typeof window !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(60);
+      }
+    } catch (err: any) {
+      console.error('Failed to clear payment:', err);
+      setErrorMsg(err.message || 'Failed to update payment status');
+    } finally {
+      setClearingPayment(false);
     }
   };
 
@@ -196,7 +238,7 @@ export default function GroupsPage() {
                     <div className="text-right">
                       <span className="text-sm font-black text-amber-400 block">₹{group.total}</span>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${isFullyPaid ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                        {isFullyPaid ? 'PAID' : `DUE: ₹${dueAmt}`}
+                        {isFullyPaid ? 'PAID' : `DUE: ₹{dueAmt}`}
                       </span>
                     </div>
                   </div>
@@ -233,8 +275,8 @@ export default function GroupsPage() {
               </button>
             </div>
 
-            {/* Financial Standings */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+            {/* Financial Standings & Payment Done Button */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
               <div className="flex justify-between text-xs">
                 <span className="text-slate-400">Total Group Amount:</span>
                 <span className="font-bold text-amber-400">₹{selectedGroup.total}</span>
@@ -247,6 +289,18 @@ export default function GroupsPage() {
                 <span className="text-slate-400">Remaining Balance Due:</span>
                 <span className="font-black text-rose-400">₹{Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0)))}</span>
               </div>
+
+              {/* Payment Done Button */}
+              {Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0))) > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePaymentDone}
+                  disabled={clearingPayment}
+                  className="w-full bg-emerald-500 active:bg-emerald-400 text-slate-950 font-black py-2.5 rounded-xl text-xs shadow-md transition-transform active:scale-95 disabled:opacity-50 mt-2"
+                >
+                  {clearingPayment ? 'Processing...' : '✓ Payment Done (Clear Balance)'}
+                </button>
+              )}
             </div>
 
             {/* Existing Members */}
