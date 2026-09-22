@@ -8,12 +8,12 @@ export interface RegistrationGroup {
   persons: number;
   rate: number;
   total: number;
-  paid_amount?: number; // Added for partial payment amount tracking
+  paid_amount?: number;
   payment_mode: PaymentMode;
   paid: boolean;
   created_by?: string;
   created_at: string;
-  is_manual?: boolean; // Added for manual custom pricing tracking and accounting tallies
+  is_manual?: boolean;
 }
 
 export interface RegistrationMember {
@@ -21,6 +21,8 @@ export interface RegistrationMember {
   group_id: string;
   name: string;
   phone: string;
+  paid_amount?: number; // Added for individual member tracking
+  paid?: boolean;       // Added for individual member paid status
   created_at: string;
 }
 

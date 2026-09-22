@@ -30,7 +30,6 @@ export async function getFullRegistrations(): Promise<RegistrationWithMembers[]>
 }
 
 export async function getNextPassNo(): Promise<number> {
-  // Queries the highest pass_no in the database to show what's next
   const { data, error } = await supabase
     .from('registration_members')
     .select('pass_no')
@@ -43,9 +42,9 @@ export async function getNextPassNo(): Promise<number> {
 
 export async function addRegistration(
   groupData: Omit<RegistrationGroup, 'id' | 'created_at'>,
-  memberInputs: { name: string; phone: string }[]
+  memberInputs: { name: string; phone: string; paid_amount?: number; paid?: boolean }[]
 ): Promise<RegistrationWithMembers> {
-  // 1. Insert Group Booking record with paid_amount and is_manual flags
+  // 1. Insert Group Booking record
   const { data: groupResult, error: groupError } = await supabase
     .from('registration_groups')
     .insert([
@@ -71,11 +70,13 @@ export async function addRegistration(
 
   const groupId = groupResult.id;
 
-  // 2. Prepare members payload (pass_no is generated automatically by Supabase IDENTITY column sequence)
+  // 2. Prepare members payload with individual payment support
   const membersPayload = memberInputs.map((m) => ({
     group_id: groupId,
     name: m.name.trim(),
     phone: m.phone.replace(/\D/g, ''),
+    paid_amount: m.paid_amount ?? 0,
+    paid: m.paid ?? false,
   }));
 
   // 3. Insert individual members
@@ -85,7 +86,6 @@ export async function addRegistration(
     .select('*');
 
   if (membersError || !membersResult) {
-    // Rollback group if members fail
     await supabase.from('registration_groups').delete().eq('id', groupId);
     throw new Error(membersError?.message || 'Failed to create individual pass members');
   }
@@ -113,7 +113,6 @@ export async function markAttendance(
   date: string, 
   staffName: string
 ): Promise<{ success: boolean; message?: string }> {
-  // Calls the atomic Postgres RPC function we created in Supabase migration
   const { data, error } = await supabase.rpc('mark_attendance', {
     p_pass_no: passNo,
     p_event_date: date,
@@ -173,7 +172,6 @@ export function getPricingConfig(): PricingTier[] {
 export async function getStaff(): Promise<StaffMember[]> {
   const { data, error } = await supabase.from('staff').select('*');
   if (error || !data || data.length === 0) {
-    // Fallback default staff if table is empty
     return [
       { id: 's1', name: 'Gate Alpha (Rajesh)', pin: '1234' },
       { id: 's2', name: 'Gate Beta (Suresh)', pin: '5678' },

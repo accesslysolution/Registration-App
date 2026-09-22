@@ -21,6 +21,14 @@ export default function GroupsPage() {
   const [clearingPayment, setClearingPayment] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Individual Member Payment State (Managed at the group financial level)
+  const [editingMemberPay, setEditingMemberPay] = useState<{
+    member: { pass_no: number; name: string; phone: string };
+    group: RegistrationWithMembers;
+  } | null>(null);
+  const [memberPayStatusType, setMemberPayStatusType] = useState<'full' | 'pending'>('full');
+  const [updatingMemberPay, setUpdatingMemberPay] = useState(false);
+
   useEffect(() => {
     fetchGroups();
   }, []);
@@ -30,7 +38,6 @@ export default function GroupsPage() {
     try {
       const data = await getFullRegistrations();
       setGroups(data);
-      // Keep selected group updated if open
       if (selectedGroup) {
         const updated = data.find((g) => g.id === selectedGroup.id);
         if (updated) setSelectedGroup(updated);
@@ -42,20 +49,18 @@ export default function GroupsPage() {
     }
   };
 
-  // Filter groups by pass number, member name, or phone
   const filteredGroups = groups.filter((g) => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
-    const matchesGroup = g.members.some(
+    return g.members.some(
       (m) =>
         m.pass_no.toString() === q ||
         m.name.toLowerCase().includes(q) ||
         m.phone.includes(q)
     );
-    return matchesGroup;
   });
 
-  // Handle adding a new member to an existing group and recalculating tiered rates
+  // Handle adding a new member on the spot with manual vs group pricing rule check
   const handleAddMemberToGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup) return;
@@ -67,7 +72,6 @@ export default function GroupsPage() {
       return;
     }
 
-    // CRITICAL: Check if this phone number already exists within THIS exact group
     const isDuplicateInGroup = selectedGroup.members.some((m) => m.phone === cleanPhone);
     if (isDuplicateInGroup) {
       setErrorMsg('This phone number is already registered in this group!');
@@ -79,21 +83,32 @@ export default function GroupsPage() {
 
     try {
       const nextPersonsCount = selectedGroup.persons + 1;
-
-      // 1. Determine new rate and total based on pass type using shared pricing configuration
       let newRate = selectedGroup.rate;
       let newTotal = selectedGroup.total;
 
       if (selectedGroup.pass_type === 'full-season') {
-        const newTier = getRatesForGroupSize(nextPersonsCount);
-        newRate = newTier.fullSeasonRate;
-        newTotal = nextPersonsCount * newRate;
+        const standardTier = getRatesForGroupSize(nextPersonsCount);
+        const standardGroupRate = standardTier.fullSeasonRate;
+
+        if (selectedGroup.is_manual) {
+          if (standardGroupRate < selectedGroup.rate) {
+            newRate = standardGroupRate;
+            newTotal = nextPersonsCount * standardGroupRate;
+          } else {
+            newRate = selectedGroup.rate;
+            newTotal = selectedGroup.total + selectedGroup.rate;
+          }
+        } else {
+          newRate = standardGroupRate;
+          newTotal = nextPersonsCount * standardGroupRate;
+        }
       } else {
-        // Per day fixed calculation (₹300 per person per selected date)
-        newTotal = nextPersonsCount * 300 * Math.max(1, selectedGroup.valid_dates.length);
+        const perDayBaseRate = selectedGroup.is_manual ? selectedGroup.rate : 300;
+        newTotal = selectedGroup.total + (perDayBaseRate * Math.max(1, selectedGroup.valid_dates.length));
+        newRate = perDayBaseRate;
       }
 
-      // 2. Insert new member into Supabase
+      // Insert new member using ONLY schema-supported columns
       const { error: memberError } = await supabase
         .from('registration_members')
         .insert([
@@ -106,25 +121,21 @@ export default function GroupsPage() {
 
       if (memberError) throw memberError;
 
-      // 3. Update parent group persons count, rate, and total in Supabase
-      const currentPaid = selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0);
-      const isStillPaid = currentPaid >= newTotal;
+      const currentPaidAmt = selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0);
+      const isStillFullyPaid = currentPaidAmt >= newTotal;
 
-      const { data: updatedGroup, error: groupError } = await supabase
+      const { error: groupError } = await supabase
         .from('registration_groups')
         .update({
           persons: nextPersonsCount,
           rate: newRate,
           total: newTotal,
-          paid: isStillPaid,
+          paid: isStillFullyPaid,
         })
-        .eq('id', selectedGroup.id)
-        .select('*')
-        .single();
+        .eq('id', selectedGroup.id);
 
       if (groupError) throw groupError;
 
-      // Refresh data
       await fetchGroups();
       setNewMemberName('');
       setNewMemberPhone('');
@@ -140,7 +151,6 @@ export default function GroupsPage() {
     }
   };
 
-  // Handle instant payment clearance for the group ("Payment Done")
   const handlePaymentDone = async () => {
     if (!selectedGroup) return;
 
@@ -148,17 +158,15 @@ export default function GroupsPage() {
     setErrorMsg('');
 
     try {
-      const { data: updatedGroup, error } = await supabase
+      const { error: groupError } = await supabase
         .from('registration_groups')
         .update({
           paid_amount: selectedGroup.total,
           paid: true,
         })
-        .eq('id', selectedGroup.id)
-        .select('*')
-        .single();
+        .eq('id', selectedGroup.id);
 
-      if (error) throw error;
+      if (groupError) throw groupError;
 
       await fetchGroups();
       if (typeof window !== 'undefined' && navigator.vibrate) {
@@ -172,83 +180,115 @@ export default function GroupsPage() {
     }
   };
 
+  const handleSaveMemberPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMemberPay) return;
+
+    const group = editingMemberPay.group;
+    const groupTotal = group.total;
+    const sharePerPerson = Math.round(groupTotal / group.persons);
+    const currentPaid = group.paid_amount ?? (group.paid ? groupTotal : 0);
+
+    // Adjust group paid amount based on individual member toggle
+    let newPaidAmount = currentPaid;
+    if (memberPayStatusType === 'full') {
+      newPaidAmount = Math.min(groupTotal, currentPaid + sharePerPerson);
+    } else {
+      newPaidAmount = Math.max(0, currentPaid - sharePerPerson);
+    }
+
+    const isGroupFullyPaidOverall = newPaidAmount >= groupTotal;
+
+    setUpdatingMemberPay(true);
+    try {
+      const { error: groupError } = await supabase
+        .from('registration_groups')
+        .update({
+          paid_amount: newPaidAmount,
+          paid: isGroupFullyPaidOverall,
+        })
+        .eq('id', group.id);
+
+      if (groupError) throw groupError;
+
+      await fetchGroups();
+      setEditingMemberPay(null);
+      if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate(60);
+    } catch (err: any) {
+      console.error('Failed to update payment:', err);
+      alert(err.message || 'Failed to update payment');
+    } finally {
+      setUpdatingMemberPay(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 pb-32 pt-4 px-4 max-w-[430px] mx-auto font-sans">
       
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+      {/* Clean Header */}
+      <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-800">
         <div>
-          <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Group Management</span>
-          <h1 className="text-2xl font-black tracking-tight text-white">Groups & Sizing</h1>
+          <h1 className="text-xl font-black text-white">Groups & Passes</h1>
         </div>
-        <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-right">
-          <span className="text-[10px] uppercase text-slate-400 block">Total Groups</span>
-          <span className="text-xs font-bold text-amber-400">{groups.length} Bookings</span>
-        </div>
-      </div>
-
-      {/* Search Input */}
-      <div className="space-y-3 mb-6">
-        <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">🔍</span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search group by pass #, name, or phone..."
-            className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-2xl pl-11 pr-4 py-3.5 text-sm text-white placeholder:text-slate-600 focus:outline-none transition-all shadow-inner"
-          />
+        <div className="bg-slate-900 border border-slate-800 px-3 py-1 rounded-xl text-right">
+          <span className="text-[10px] uppercase text-slate-400 block">Total</span>
+          <span className="text-xs font-bold text-amber-400">{groups.length} Groups</span>
         </div>
       </div>
 
-      {/* Groups List */}
+      {/* Simplified Search Input */}
+      <div className="mb-5">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search by pass #, name, or phone..."
+          className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-2xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all"
+        />
+      </div>
+
+      {/* Clean Group List */}
       <div className="space-y-3">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          All Registered Groups ({filteredGroups.length})
-        </h2>
-
         {loading ? (
-          <div className="text-center py-12 text-slate-500 text-sm">Loading groups from database...</div>
+          <div className="text-center py-12 text-slate-500 text-sm">Loading...</div>
         ) : filteredGroups.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-sm bg-slate-900/40 rounded-2xl border border-slate-900">
             No groups found.
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {filteredGroups.map((group) => {
               const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
               const dueAmt = Math.max(0, group.total - paidAmt);
               const isFullyPaid = dueAmt <= 0;
+              const leadMember = group.members[0];
 
               return (
                 <div
                   key={group.id}
                   onClick={() => setSelectedGroup(group)}
-                  className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-2xl shadow-md transition-all active:scale-[0.99] cursor-pointer space-y-3"
+                  className="bg-slate-900/90 border border-slate-800/80 hover:border-amber-500/40 p-3.5 rounded-2xl transition-all cursor-pointer flex items-center justify-between"
                 >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-xs font-black bg-amber-500/20 text-amber-400 px-2.5 py-1 rounded-lg border border-amber-500/30">
-                        {group.persons} {group.persons === 1 ? 'Person' : 'Persons'} Group
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black text-amber-400">
+                        {leadMember ? `#${leadMember.pass_no}` : 'Group'}
                       </span>
-                      <h3 className="font-bold text-white text-base mt-2">
-                        {group.members[0]?.name || 'Group Booking'} + {group.members.length - 1} others
-                      </h3>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-sm font-black text-amber-400 block">₹{group.total}</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${isFullyPaid ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                        {isFullyPaid ? 'PAID' : `DUE: ₹{dueAmt}`}
+                      <span className="text-xs font-bold text-white">
+                        {leadMember?.name || 'Group Booking'} {group.persons > 1 ? `+ ${group.persons - 1}` : ''}
                       </span>
                     </div>
+                    <span className="text-[11px] text-slate-400 block font-mono">
+                      {group.persons} {group.persons === 1 ? 'Person' : 'Persons'} • Total ₹{group.total}
+                    </span>
                   </div>
 
-                  <div className="text-xs text-slate-400 flex flex-wrap gap-1 pt-1 border-t border-slate-800/80">
-                    {group.members.map((m) => (
-                      <span key={m.pass_no} className="bg-slate-950 px-2 py-1 rounded-lg font-mono text-[11px] text-slate-300 border border-slate-800">
-                        #{m.pass_no} {m.name}
-                      </span>
-                    ))}
+                  <div className="text-right">
+                    <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${
+                      isFullyPaid ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                    }`}>
+                      {isFullyPaid ? 'PAID' : `DUE ₹${dueAmt}`}
+                    </span>
                   </div>
                 </div>
               );
@@ -257,72 +297,94 @@ export default function GroupsPage() {
         )}
       </div>
 
-      {/* GROUP DETAILS & ADD MEMBER MODAL */}
+      {/* SIMPLIFIED GROUP DETAILS & EDIT MODAL */}
       {selectedGroup && (
         <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fadeIn">
-          <div className="bg-slate-900 border-t-2 sm:border-2 border-amber-500 w-full max-w-[430px] rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-[430px] rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div>
-                <span className="text-[10px] font-bold uppercase text-amber-400">Group Management</span>
-                <h2 className="text-xl font-black text-white">{selectedGroup.persons} Members Group</h2>
+                <span className="text-[10px] font-bold uppercase text-amber-400 block">Group Overview</span>
+                <h2 className="text-lg font-black text-white">{selectedGroup.persons} Members Total</h2>
               </div>
               <button 
                 onClick={() => { setSelectedGroup(null); setErrorMsg(''); }} 
-                className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 font-bold flex items-center justify-center"
+                className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 font-bold flex items-center justify-center text-xs"
               >
                 ✕
               </button>
             </div>
 
-            {/* Financial Standings & Payment Done Button */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
-              <div className="flex justify-between text-xs">
-                <span className="text-slate-400">Total Group Amount:</span>
-                <span className="font-bold text-amber-400">₹{selectedGroup.total}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-slate-400">Amount Paid:</span>
-                <span className="font-bold text-emerald-400">₹{selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0)}</span>
-              </div>
-              <div className="flex justify-between text-xs border-t border-slate-800 pt-2">
-                <span className="text-slate-400">Remaining Balance Due:</span>
-                <span className="font-black text-rose-400">₹{Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0)))}</span>
+            {/* Clear Financial Summary */}
+            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex justify-between items-center">
+              <div>
+                <span className="text-[10px] uppercase text-slate-400 block">Total / Received</span>
+                <span className="text-base font-black text-white">₹{selectedGroup.total}</span>
+                <span className="text-xs font-bold text-emerald-400 block">
+                  Received: ₹{selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0)}
+                </span>
+                {Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0))) > 0 && (
+                  <span className="text-xs font-bold text-rose-400 block">
+                    Due: ₹{Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0)))}
+                  </span>
+                )}
               </div>
 
-              {/* Payment Done Button */}
               {Math.max(0, selectedGroup.total - (selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0))) > 0 && (
                 <button
                   type="button"
                   onClick={handlePaymentDone}
                   disabled={clearingPayment}
-                  className="w-full bg-emerald-500 active:bg-emerald-400 text-slate-950 font-black py-2.5 rounded-xl text-xs shadow-md transition-transform active:scale-95 disabled:opacity-50 mt-2"
+                  className="bg-emerald-500 active:bg-emerald-400 text-slate-950 font-black px-4 py-2 rounded-xl text-xs shadow transition-transform active:scale-95 disabled:opacity-50"
                 >
-                  {clearingPayment ? 'Processing...' : '✓ Payment Done (Clear Balance)'}
+                  {clearingPayment ? '...' : 'Clear Payment ✓'}
                 </button>
               )}
             </div>
 
-            {/* Existing Members */}
+            {/* Clean Members List */}
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">Current Group Members:</span>
-              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                {selectedGroup.members.map((m) => (
-                  <div key={m.pass_no} className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex justify-between items-center text-xs">
-                    <div>
-                      <span className="text-amber-400 font-mono font-bold mr-2">#{m.pass_no}</span>
-                      <span className="text-white font-medium">{m.name}</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Members & Passes (Tap to edit status):</span>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                {selectedGroup.members.map((m: any, idx: number) => {
+                  const groupTotal = selectedGroup.total;
+                  const groupPaid = selectedGroup.paid_amount ?? (selectedGroup.paid ? groupTotal : 0);
+                  const sharePerPerson = Math.round(groupTotal / selectedGroup.persons);
+                  
+                  // Proportional derived payment state per member based on group paid amount
+                  const paidSlots = Math.floor(groupPaid / sharePerPerson);
+                  const isMemberPaid = idx < paidSlots || groupPaid >= groupTotal;
+
+                  return (
+                    <div 
+                      key={m.pass_no} 
+                      onClick={() => {
+                        setEditingMemberPay({ member: m, group: selectedGroup });
+                        setMemberPayStatusType(isMemberPaid ? 'full' : 'pending');
+                      }}
+                      className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex justify-between items-center cursor-pointer hover:border-slate-700"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-amber-400 font-mono font-bold text-xs">#{m.pass_no}</span>
+                        <div>
+                          <span className="text-white font-medium text-xs block">{m.name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">Share: ₹{sharePerPerson}</span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        isMemberPaid ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                      }`}>
+                        {isMemberPaid ? 'PAID ✓' : 'PENDING'}
+                      </span>
                     </div>
-                    <span className="text-slate-400 font-mono">+91 {m.phone}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* Form to Add New Member on the Spot */}
-            <form onSubmit={handleAddMemberToGroup} className="space-y-3 pt-2 border-t border-slate-800">
-              <span className="text-xs font-bold uppercase text-amber-400 block">Add New Member on the Spot</span>
-              <p className="text-[11px] text-slate-400">Adding a member will automatically recalculate group tiered pricing and update the remaining balance due.</p>
+            {/* Quick Add Member Form */}
+            <form onSubmit={handleAddMemberToGroup} className="space-y-2.5 pt-2 border-t border-slate-800">
+              <span className="text-xs font-bold text-slate-300 block">Add Member on the Spot</span>
 
               <input
                 type="text"
@@ -330,11 +392,11 @@ export default function GroupsPage() {
                 onChange={(e) => setNewMemberName(e.target.value)}
                 placeholder="Full Name"
                 disabled={addingMember}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white focus:border-amber-500 focus:outline-none"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:border-amber-500 focus:outline-none"
               />
 
               <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">+91</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">+91</span>
                 <input
                   type="tel"
                   maxLength={10}
@@ -342,18 +404,66 @@ export default function GroupsPage() {
                   onChange={(e) => setNewMemberPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                   placeholder="9876543210"
                   disabled={addingMember}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-12 pr-3.5 py-3 text-sm text-white focus:border-amber-500 focus:outline-none font-mono"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:border-amber-500 focus:outline-none font-mono"
                 />
               </div>
 
-              {errorMsg && <p className="text-xs text-rose-400 font-semibold">{errorMsg}</p>}
+              {errorMsg && <p className="text-[11px] text-rose-400 font-semibold">{errorMsg}</p>}
 
               <button
                 type="submit"
                 disabled={addingMember}
-                className="w-full bg-amber-500 active:bg-amber-400 text-slate-950 font-black py-3.5 rounded-xl shadow-lg transition-transform active:scale-95 disabled:opacity-50 text-sm"
+                className="w-full bg-amber-500 active:bg-amber-400 text-slate-950 font-black py-3 rounded-xl text-xs transition-transform active:scale-95 disabled:opacity-50"
               >
-                {addingMember ? 'Updating Group & Rates...' : 'Add Member & Recalculate Total ➔'}
+                {addingMember ? 'Adding...' : 'Add Member'}
+              </button>
+            </form>
+
+          </div>
+        </div>
+      )}
+
+      {/* MEMBER STATUS MODAL */}
+      {editingMemberPay && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-[340px] rounded-3xl p-5 shadow-2xl space-y-4">
+            
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <div>
+                <span className="text-[10px] uppercase text-slate-400 block">Member Payment State</span>
+                <h2 className="text-sm font-black text-white">{editingMemberPay.member.name}</h2>
+              </div>
+              <button onClick={() => setEditingMemberPay(null)} className="text-slate-400 font-bold text-xs">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveMemberPayment} className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMemberPayStatusType('full')}
+                  className={`py-2.5 rounded-xl font-bold text-xs border transition-all ${
+                    memberPayStatusType === 'full' ? 'bg-emerald-950 text-emerald-400 border-emerald-500/50' : 'bg-slate-950 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  Mark Paid ✓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMemberPayStatusType('pending')}
+                  className={`py-2.5 rounded-xl font-bold text-xs border transition-all ${
+                    memberPayStatusType === 'pending' ? 'bg-rose-950 text-rose-400 border-rose-500/50' : 'bg-slate-950 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  Mark Pending ⚠
+                </button>
+              </div>
+
+              <button
+                type="submit"
+                disabled={updatingMemberPay}
+                className="w-full bg-amber-500 active:bg-amber-400 text-slate-950 font-black py-2.5 rounded-xl text-xs transition-transform active:scale-95"
+              >
+                {updatingMemberPay ? 'Saving...' : 'Save Payment Status ✓'}
               </button>
             </form>
 
