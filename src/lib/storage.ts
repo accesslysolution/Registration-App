@@ -42,9 +42,9 @@ export async function getNextPassNo(): Promise<number> {
 
 export async function addRegistration(
   groupData: Omit<RegistrationGroup, 'id' | 'created_at'>,
-  memberInputs: { name: string; phone: string; paid_amount?: number; paid?: boolean }[]
+  memberInputs: { name: string; phone: string }[]
 ): Promise<RegistrationWithMembers> {
-  // 1. Insert Group Booking record
+  // 1. Insert Group Booking record with financial tracking
   const { data: groupResult, error: groupError } = await supabase
     .from('registration_groups')
     .insert([
@@ -70,13 +70,11 @@ export async function addRegistration(
 
   const groupId = groupResult.id;
 
-  // 2. Prepare members payload with individual payment support
+  // 2. Prepare members payload matching exact schema columns
   const membersPayload = memberInputs.map((m) => ({
     group_id: groupId,
     name: m.name.trim(),
     phone: m.phone.replace(/\D/g, ''),
-    paid_amount: m.paid_amount ?? 0,
-    paid: m.paid ?? false,
   }));
 
   // 3. Insert individual members

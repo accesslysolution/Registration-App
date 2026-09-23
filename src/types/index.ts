@@ -21,8 +21,6 @@ export interface RegistrationMember {
   group_id: string;
   name: string;
   phone: string;
-  paid_amount?: number; // Added for individual member tracking
-  paid?: boolean;       // Added for individual member paid status
   created_at: string;
 }
 
