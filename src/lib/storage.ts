@@ -33,11 +33,20 @@ export async function getNextPassNo(): Promise<number> {
   const { data, error } = await supabase
     .from('registration_members')
     .select('pass_no')
-    .order('pass_no', { ascending: false })
-    .limit(1);
+    .order('pass_no', { ascending: true });
 
   if (error || !data || data.length === 0) return 1;
-  return Number(data[0].pass_no) + 1;
+
+  // Extract existing pass numbers into a Set for fast lookup
+  const existingPassNos = new Set(data.map((m) => Number(m.pass_no)));
+
+  // Scan upward starting from 1 to find the first available unused pass number
+  let candidate = 1;
+  while (existingPassNos.has(candidate)) {
+    candidate++;
+  }
+
+  return candidate;
 }
 
 export async function addRegistration(
@@ -70,14 +79,30 @@ export async function addRegistration(
 
   const groupId = groupResult.id;
 
-  // 2. Prepare members payload matching exact schema columns
-  const membersPayload = memberInputs.map((m) => ({
-    group_id: groupId,
-    name: m.name.trim(),
-    phone: m.phone.replace(/\D/g, ''),
-  }));
+  // 2. Fetch all existing pass numbers to avoid collisions and explicitly assign available gaps
+  const { data: allMembers } = await supabase
+    .from('registration_members')
+    .select('pass_no');
 
-  // 3. Insert individual members
+  const existingPassNos = new Set((allMembers || []).map((m) => Number(m.pass_no)));
+  
+  let currentCandidate = 1;
+  const membersPayload = memberInputs.map((m) => {
+    while (existingPassNos.has(currentCandidate)) {
+      currentCandidate++;
+    }
+    const assignedPassNo = currentCandidate;
+    existingPassNos.add(assignedPassNo); // reserve for subsequent members in the same group batch
+
+    return {
+      pass_no: assignedPassNo,
+      group_id: groupId,
+      name: m.name.trim(),
+      phone: m.phone.replace(/\D/g, ''),
+    };
+  });
+
+  // 3. Insert individual members with explicit pass numbers
   const { data: membersResult, error: membersError } = await supabase
     .from('registration_members')
     .insert(membersPayload)
