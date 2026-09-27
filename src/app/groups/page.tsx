@@ -19,9 +19,11 @@ export default function GroupsPage() {
   const [newMemberPhone, setNewMemberPhone] = useState('');
   const [addingMember, setAddingMember] = useState(false);
   const [clearingPayment, setClearingPayment] = useState(false);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [deletingMemberPassNo, setDeletingMemberPassNo] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Individual Member Payment State (Managed at the group financial level)
+  // Individual Member Payment State
   const [editingMemberPay, setEditingMemberPay] = useState<{
     member: { pass_no: number; name: string; phone: string };
     group: RegistrationWithMembers;
@@ -60,7 +62,7 @@ export default function GroupsPage() {
     );
   });
 
-  // Handle adding a new member on the spot with manual vs group pricing rule check
+  // Handle adding a new member with gap-filling pass assignment
   const handleAddMemberToGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup) return;
@@ -82,6 +84,19 @@ export default function GroupsPage() {
     setErrorMsg('');
 
     try {
+      const { data: allMembers, error: fetchPassError } = await supabase
+        .from('registration_members')
+        .select('pass_no');
+
+      if (fetchPassError) throw fetchPassError;
+
+      const existingPassNos = new Set((allMembers || []).map((m) => Number(m.pass_no)));
+      
+      let nextAvailablePassNo = 1;
+      while (existingPassNos.has(nextAvailablePassNo)) {
+        nextAvailablePassNo++;
+      }
+
       const nextPersonsCount = selectedGroup.persons + 1;
       let newRate = selectedGroup.rate;
       let newTotal = selectedGroup.total;
@@ -108,11 +123,11 @@ export default function GroupsPage() {
         newRate = perDayBaseRate;
       }
 
-      // Insert new member using ONLY schema-supported columns
       const { error: memberError } = await supabase
         .from('registration_members')
         .insert([
           {
+            pass_no: nextAvailablePassNo,
             group_id: selectedGroup.id,
             name: newMemberName.trim(),
             phone: cleanPhone,
@@ -151,6 +166,84 @@ export default function GroupsPage() {
     }
   };
 
+  // Handle Deleting an Individual Member from a Group
+  const handleDeleteMember = async (passNo: number, memberName: string) => {
+    if (!selectedGroup) return;
+
+    // Prevent deleting the last remaining member of the group (use delete group instead)
+    if (selectedGroup.members.length <= 1) {
+      alert('Cannot delete the last member. To remove the entire booking, use "Delete Group / Entry" below.');
+      return;
+    }
+
+    const confirmDelete = window.confirm(`Are you sure you want to remove ${memberName} (Pass #${passNo}) from this group?`);
+    if (!confirmDelete) return;
+
+    setDeletingMemberPassNo(passNo);
+    setErrorMsg('');
+
+    try {
+      // 1. Delete member from registration_members
+      const { error: memberError } = await supabase
+        .from('registration_members')
+        .delete()
+        .eq('pass_no', passNo);
+
+      if (memberError) throw memberError;
+
+      // 2. Recalculate group totals and person count
+      const nextPersonsCount = selectedGroup.persons - 1;
+      let newRate = selectedGroup.rate;
+      let newTotal = selectedGroup.total;
+
+      if (selectedGroup.pass_type === 'full-season') {
+        const standardTier = getRatesForGroupSize(nextPersonsCount);
+        const standardGroupRate = standardTier.fullSeasonRate;
+
+        if (selectedGroup.is_manual) {
+          if (selectedGroup.rate > standardGroupRate) {
+            newRate = standardGroupRate;
+            newTotal = nextPersonsCount * standardGroupRate;
+          } else {
+            newTotal = Math.max(0, selectedGroup.total - selectedGroup.rate);
+          }
+        } else {
+          newRate = standardGroupRate;
+          newTotal = nextPersonsCount * standardGroupRate;
+        }
+      } else {
+        const perDayBaseRate = selectedGroup.is_manual ? selectedGroup.rate : 300;
+        newTotal = Math.max(0, selectedGroup.total - (perDayBaseRate * Math.max(1, selectedGroup.valid_dates.length)));
+      }
+
+      const currentPaidAmt = selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0);
+      const isStillFullyPaid = currentPaidAmt >= newTotal;
+
+      // 3. Update group record
+      const { error: groupError } = await supabase
+        .from('registration_groups')
+        .update({
+          persons: nextPersonsCount,
+          rate: newRate,
+          total: newTotal,
+          paid: isStillFullyPaid,
+        })
+        .eq('id', selectedGroup.id);
+
+      if (groupError) throw groupError;
+
+      await fetchGroups();
+      if (typeof window !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(80);
+      }
+    } catch (err: any) {
+      console.error('Failed to delete member:', err);
+      setErrorMsg(err.message || 'Failed to remove member');
+    } finally {
+      setDeletingMemberPassNo(null);
+    }
+  };
+
   const handlePaymentDone = async () => {
     if (!selectedGroup) return;
 
@@ -180,6 +273,36 @@ export default function GroupsPage() {
     }
   };
 
+  const handleDeleteGroup = async () => {
+    if (!selectedGroup) return;
+    const confirmDelete = window.confirm('Are you sure you want to delete this entire group and all its passes?');
+    if (!confirmDelete) return;
+
+    setDeletingGroup(true);
+    setErrorMsg('');
+
+    try {
+      const { error } = await supabase
+        .from('registration_groups')
+        .delete()
+        .eq('id', selectedGroup.id);
+
+      if (error) throw error;
+
+      setSelectedGroup(null);
+      await fetchGroups();
+
+      if (typeof window !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(100);
+      }
+    } catch (err: any) {
+      console.error('Failed to delete group:', err);
+      setErrorMsg(err.message || 'Failed to delete group from database');
+    } finally {
+      setDeletingGroup(false);
+    }
+  };
+
   const handleSaveMemberPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMemberPay) return;
@@ -189,7 +312,6 @@ export default function GroupsPage() {
     const sharePerPerson = Math.round(groupTotal / group.persons);
     const currentPaid = group.paid_amount ?? (group.paid ? groupTotal : 0);
 
-    // Adjust group paid amount based on individual member toggle
     let newPaidAmount = currentPaid;
     if (memberPayStatusType === 'full') {
       newPaidAmount = Math.min(groupTotal, currentPaid + sharePerPerson);
@@ -279,7 +401,7 @@ export default function GroupsPage() {
                       </span>
                     </div>
                     <span className="text-[11px] text-slate-400 block font-mono">
-                      {group.persons} {group.persons === 1 ? 'Person' : 'Persons'} • Total ₹{group.total}
+                      {group.persons} {group.persons === 1 ? 'Person' : 'Persons'} • ₹{group.total}
                     </span>
                   </div>
 
@@ -287,7 +409,7 @@ export default function GroupsPage() {
                     <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${
                       isFullyPaid ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
                     }`}>
-                      {isFullyPaid ? 'PAID' : `DUE ₹${dueAmt}`}
+                      {isFullyPaid ? 'PAID' : `DUE ₹{dueAmt}`}
                     </span>
                   </div>
                 </div>
@@ -342,40 +464,61 @@ export default function GroupsPage() {
               )}
             </div>
 
-            {/* Clean Members List */}
+            {/* Clean Members List with Individual Delete Option */}
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">Members & Passes (Tap to edit status):</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Members & Passes (Tap to edit status, or delete):</span>
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                 {selectedGroup.members.map((m: any, idx: number) => {
                   const groupTotal = selectedGroup.total;
                   const groupPaid = selectedGroup.paid_amount ?? (selectedGroup.paid ? groupTotal : 0);
                   const sharePerPerson = Math.round(groupTotal / selectedGroup.persons);
                   
-                  // Proportional derived payment state per member based on group paid amount
                   const paidSlots = Math.floor(groupPaid / sharePerPerson);
                   const isMemberPaid = idx < paidSlots || groupPaid >= groupTotal;
+                  const isDeletingThisMember = deletingMemberPassNo === m.pass_no;
 
                   return (
                     <div 
                       key={m.pass_no} 
-                      onClick={() => {
-                        setEditingMemberPay({ member: m, group: selectedGroup });
-                        setMemberPayStatusType(isMemberPaid ? 'full' : 'pending');
-                      }}
-                      className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex justify-between items-center cursor-pointer hover:border-slate-700"
+                      className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex justify-between items-center hover:border-slate-700"
                     >
-                      <div className="flex items-center gap-2">
+                      <div 
+                        onClick={() => {
+                          setEditingMemberPay({ member: m, group: selectedGroup });
+                          setMemberPayStatusType(isMemberPaid ? 'full' : 'pending');
+                        }}
+                        className="flex items-center gap-2 cursor-pointer grow"
+                      >
                         <span className="text-amber-400 font-mono font-bold text-xs">#{m.pass_no}</span>
                         <div>
                           <span className="text-white font-medium text-xs block">{m.name}</span>
                           <span className="text-[10px] text-slate-400 font-mono">Share: ₹{sharePerPerson}</span>
                         </div>
                       </div>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        isMemberPaid ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
-                      }`}>
-                        {isMemberPaid ? 'PAID ✓' : 'PENDING'}
-                      </span>
+
+                      <div className="flex items-center gap-2">
+                        <span 
+                          onClick={() => {
+                            setEditingMemberPay({ member: m, group: selectedGroup });
+                            setMemberPayStatusType(isMemberPaid ? 'full' : 'pending');
+                          }}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded cursor-pointer ${
+                            isMemberPaid ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                          }`}
+                        >
+                          {isMemberPaid ? 'PAID ✓' : 'PENDING'}
+                        </span>
+                        
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMember(m.pass_no, m.name)}
+                          disabled={isDeletingThisMember}
+                          title="Delete member"
+                          className="w-6 h-6 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center text-xs font-bold transition-colors"
+                        >
+                          {isDeletingThisMember ? '...' : '✕'}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -418,6 +561,18 @@ export default function GroupsPage() {
                 {addingMember ? 'Adding...' : 'Add Member'}
               </button>
             </form>
+
+            {/* DELETE GROUP BUTTON */}
+            <div className="pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={handleDeleteGroup}
+                disabled={deletingGroup}
+                className="w-full bg-rose-950/40 hover:bg-rose-900/60 active:scale-95 text-rose-400 font-bold py-2.5 rounded-xl text-xs border border-rose-500/30 transition-all disabled:opacity-50"
+              >
+                {deletingGroup ? 'Deleting...' : '🗑 Delete Entire Group'}
+              </button>
+            </div>
 
           </div>
         </div>
