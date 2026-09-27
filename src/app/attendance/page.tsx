@@ -148,6 +148,7 @@ export default function AttendancePage() {
           member,
           group,
           passType,
+          validDates,
           lastEntryTime,
         });
       } else {
@@ -156,6 +157,7 @@ export default function AttendancePage() {
           member,
           group,
           passType,
+          validDates,
         });
       }
 
@@ -385,7 +387,7 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* 3. READY / FOUND (GREEN ACTIVE STATE WITH PAYMENT STATUS & CLEAR BUTTON) */}
+      {/* 3. READY / FOUND (GREEN ACTIVE STATE WITH DATES & PAYMENT STATUS) */}
       {evalResult?.status === 'READY' && evalResult.member && (
         <div className="bg-slate-900 border-2 border-emerald-500 rounded-3xl p-6 space-y-5 animate-fadeIn shadow-2xl">
           
@@ -400,6 +402,29 @@ export default function AttendancePage() {
             <span className="text-xs font-mono bg-slate-800 px-2.5 py-1 rounded-xl text-slate-300 border border-slate-700">
               +91 {evalResult.member.phone}
             </span>
+          </div>
+
+          {/* PASS VALIDITY & DATES BADGE */}
+          <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] uppercase font-bold text-slate-400">Pass Type & Validity:</span>
+              <span className="text-xs font-black text-amber-400 uppercase">
+                {evalResult.passType === 'full-season' ? 'Full Season Pass (All Days)' : `${evalResult.validDates?.length || 0} Days Booked`}
+              </span>
+            </div>
+
+            {evalResult.passType === 'per-day' && evalResult.validDates && evalResult.validDates.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {evalResult.validDates.map((d) => {
+                  const labelText = EVENT_DATE_LABELS[d] || d.toUpperCase();
+                  return (
+                    <span key={d} className="bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-emerald-500/30">
+                      {d.toUpperCase()} — {labelText}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* GROUP PAYMENT STATUS BANNER */}
