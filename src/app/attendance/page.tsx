@@ -20,6 +20,34 @@ interface ScanEvaluation {
   lastEntryTime?: string | null;
 }
 
+// Readable labels for each event date ID
+const EVENT_DATE_LABELS: Record<string, string> = {
+  'd1': 'Sun, Sep 27',
+  'd2': 'Mon, Sep 28',
+  'd3': 'Tue, Sep 29',
+  'd4': 'Wed, Sep 30',
+  'd5': 'Thu, Oct 1',
+  'd6': 'Fri, Oct 2',
+  'd7': 'Sat, Oct 3',
+  'd8': 'Sun, Oct 4',
+  'd9': 'Mon, Oct 5',
+  'd10': 'Tue, Oct 6',
+};
+
+// Map calendar dates to event date IDs for validation
+const EVENT_DATE_MAP: Record<string, string> = {
+  '2026-09-27': 'd1',
+  '2026-09-28': 'd2',
+  '2026-09-29': 'd3',
+  '2026-09-30': 'd4',
+  '2026-10-01': 'd5',
+  '2026-10-02': 'd6',
+  '2026-10-03': 'd7',
+  '2026-10-04': 'd8',
+  '2026-10-05': 'd9',
+  '2026-10-06': 'd10',
+};
+
 export default function AttendancePage() {
   const [searchInput, setSearchInput] = useState('');
   const [evalResult, setEvalResult] = useState<ScanEvaluation | null>(null);
@@ -32,8 +60,9 @@ export default function AttendancePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const staffName = typeof window !== 'undefined' ? sessionStorage.getItem('garba_logged_staff') || 'Gate Staff' : 'Gate Staff';
 
-  // Automatically determine today's event date string (Format: YYYY-MM-DD ensures daily reset/isolation)
+  // Automatically determine today's event date string and mapped event ID
   const todayEventDateId = new Date().toISOString().split('T')[0];
+  const todayEventId = EVENT_DATE_MAP[todayEventDateId] || '';
 
   const formattedDisplayDate = new Date().toLocaleDateString('en-IN', {
     day: 'numeric',
@@ -92,9 +121,9 @@ export default function AttendancePage() {
       const relatedMembers = members.filter((m) => m.group_id === member.group_id);
       setGroupMembers(relatedMembers);
 
-      // Validate Per-Day pass for today's event date if applicable
+      // Validate Per-Day pass for today's event date using both mapped ID and raw ISO string
       if (passType === 'per-day' && validDates && validDates.length > 0) {
-        const isDateAllowed = validDates.includes(todayEventDateId) || validDates.some(d => todayEventDateId.includes(d));
+        const isDateAllowed = validDates.includes(todayEventId) || validDates.includes(todayEventDateId) || validDates.some(d => todayEventDateId.includes(d));
         if (!isDateAllowed) {
           setEvalResult({
             status: 'INVALID_DATE',
@@ -119,6 +148,7 @@ export default function AttendancePage() {
           member,
           group,
           passType,
+          validDates,
           lastEntryTime,
         });
       } else {
@@ -127,6 +157,7 @@ export default function AttendancePage() {
           member,
           group,
           passType,
+          validDates,
         });
       }
 
@@ -336,11 +367,14 @@ export default function AttendancePage() {
           <div className="bg-slate-950/60 p-3 rounded-2xl border border-rose-900 text-left">
             <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Valid Booked Dates for this Pass:</span>
             <div className="flex flex-wrap gap-1.5">
-              {evalResult.validDates?.map((d) => (
-                <span key={d} className="bg-rose-500/20 text-rose-300 px-2 py-1 rounded-lg text-xs font-bold border border-rose-500/30">
-                  {d.toUpperCase()}
-                </span>
-              ))}
+              {evalResult.validDates?.map((d) => {
+                const labelText = EVENT_DATE_LABELS[d] || d.toUpperCase();
+                return (
+                  <span key={d} className="bg-rose-500/20 text-rose-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-rose-500/30">
+                    {d.toUpperCase()} — {labelText}
+                  </span>
+                );
+              })}
             </div>
           </div>
 
@@ -353,7 +387,7 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* 3. READY / FOUND (GREEN ACTIVE STATE WITH PAYMENT STATUS & CLEAR BUTTON) */}
+      {/* 3. READY / FOUND (GREEN ACTIVE STATE WITH DATES & PAYMENT STATUS) */}
       {evalResult?.status === 'READY' && evalResult.member && (
         <div className="bg-slate-900 border-2 border-emerald-500 rounded-3xl p-6 space-y-5 animate-fadeIn shadow-2xl">
           
@@ -368,6 +402,29 @@ export default function AttendancePage() {
             <span className="text-xs font-mono bg-slate-800 px-2.5 py-1 rounded-xl text-slate-300 border border-slate-700">
               +91 {evalResult.member.phone}
             </span>
+          </div>
+
+          {/* PASS VALIDITY & DATES BADGE */}
+          <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] uppercase font-bold text-slate-400">Pass Type & Validity:</span>
+              <span className="text-xs font-black text-amber-400 uppercase">
+                {evalResult.passType === 'full-season' ? 'Full Season Pass (All Days)' : `${evalResult.validDates?.length || 0} Days Booked`}
+              </span>
+            </div>
+
+            {evalResult.passType === 'per-day' && evalResult.validDates && evalResult.validDates.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {evalResult.validDates.map((d) => {
+                  const labelText = EVENT_DATE_LABELS[d] || d.toUpperCase();
+                  return (
+                    <span key={d} className="bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-emerald-500/30">
+                      {d.toUpperCase()} — {labelText}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* GROUP PAYMENT STATUS BANNER */}
