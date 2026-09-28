@@ -149,11 +149,11 @@ export default function DashboardPage() {
       let csvContent = 'data:text/csv;charset=utf-8,';
       
       if (type === 'registrations') {
-        csvContent += 'PassNumber,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
+        csvContent += 'PassNumber,GroupId,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
         registrations.forEach((group) => {
           const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
           group.members.forEach((m) => {
-            csvContent += `${m.pass_no},"${m.name}",${m.phone},${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
+            csvContent += `${m.pass_no},${group.id},"${m.name}",${m.phone},${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
           });
         });
       } else if (type === 'attendance') {
