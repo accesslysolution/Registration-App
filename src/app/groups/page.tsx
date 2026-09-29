@@ -170,7 +170,6 @@ export default function GroupsPage() {
   const handleDeleteMember = async (passNo: number, memberName: string) => {
     if (!selectedGroup) return;
 
-    // Prevent deleting the last remaining member of the group (use delete group instead)
     if (selectedGroup.members.length <= 1) {
       alert('Cannot delete the last member. To remove the entire booking, use "Delete Group / Entry" below.');
       return;
@@ -183,7 +182,6 @@ export default function GroupsPage() {
     setErrorMsg('');
 
     try {
-      // 1. Delete member from registration_members
       const { error: memberError } = await supabase
         .from('registration_members')
         .delete()
@@ -191,7 +189,6 @@ export default function GroupsPage() {
 
       if (memberError) throw memberError;
 
-      // 2. Recalculate group totals and person count
       const nextPersonsCount = selectedGroup.persons - 1;
       let newRate = selectedGroup.rate;
       let newTotal = selectedGroup.total;
@@ -219,7 +216,6 @@ export default function GroupsPage() {
       const currentPaidAmt = selectedGroup.paid_amount ?? (selectedGroup.paid ? selectedGroup.total : 0);
       const isStillFullyPaid = currentPaidAmt >= newTotal;
 
-      // 3. Update group record
       const { error: groupError } = await supabase
         .from('registration_groups')
         .update({
@@ -309,14 +305,15 @@ export default function GroupsPage() {
 
     const group = editingMemberPay.group;
     const groupTotal = group.total;
-    const sharePerPerson = Math.round(groupTotal / group.persons);
+    // Calculate individual share accurately based on stored rate or division
+    const individualShare = group.rate && group.rate > 0 ? group.rate : Math.round(groupTotal / group.persons);
     const currentPaid = group.paid_amount ?? (group.paid ? groupTotal : 0);
 
     let newPaidAmount = currentPaid;
     if (memberPayStatusType === 'full') {
-      newPaidAmount = Math.min(groupTotal, currentPaid + sharePerPerson);
+      newPaidAmount = Math.min(groupTotal, currentPaid + individualShare);
     } else {
-      newPaidAmount = Math.max(0, currentPaid - sharePerPerson);
+      newPaidAmount = Math.max(0, currentPaid - individualShare);
     }
 
     const isGroupFullyPaidOverall = newPaidAmount >= groupTotal;
@@ -464,16 +461,17 @@ export default function GroupsPage() {
               )}
             </div>
 
-            {/* Clean Members List with Individual Delete Option */}
+            {/* Clean Members List with Individual Per-Person Share */}
             <div className="space-y-2">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">Members & Passes (Tap to edit status, or delete):</span>
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                 {selectedGroup.members.map((m: any, idx: number) => {
                   const groupTotal = selectedGroup.total;
                   const groupPaid = selectedGroup.paid_amount ?? (selectedGroup.paid ? groupTotal : 0);
-                  const sharePerPerson = Math.round(groupTotal / selectedGroup.persons);
+                  // Use individual rate if available, otherwise safely derive per-person share amount
+                  const individualShare = selectedGroup.rate && selectedGroup.rate > 0 ? selectedGroup.rate : Math.round(groupTotal / selectedGroup.persons);
                   
-                  const paidSlots = Math.floor(groupPaid / sharePerPerson);
+                  const paidSlots = Math.floor(groupPaid / individualShare);
                   const isMemberPaid = idx < paidSlots || groupPaid >= groupTotal;
                   const isDeletingThisMember = deletingMemberPassNo === m.pass_no;
 
@@ -492,7 +490,7 @@ export default function GroupsPage() {
                         <span className="text-amber-400 font-mono font-bold text-xs">#{m.pass_no}</span>
                         <div>
                           <span className="text-white font-medium text-xs block">{m.name}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">Share: ₹{sharePerPerson}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">Per Person Share: ₹{individualShare}</span>
                         </div>
                       </div>
 

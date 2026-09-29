@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { RegistrationWithMembers, RegistrationMember } from '@/types';
-import { getFullRegistrations, getAttendanceForPass, getFreeEntries } from '@/lib/storage';
+import { getFullRegistrations, getFreeEntries } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
 
 export default function DashboardPage() {
@@ -11,6 +11,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   
+  // Dashboard & CSV Export Date Filter State
+  const [selectedDashboardDate, setSelectedDashboardDate] = useState('all');
+
   // Edit modal state for individual member pass
   const [editingMemberPass, setEditingMemberPass] = useState<{ member: RegistrationMember; group: RegistrationWithMembers } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'error'>('idle');
@@ -26,27 +29,37 @@ export default function DashboardPage() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch full relational group & member registrations from Supabase via storage layer
-      const data = await getFullRegistrations();
+      // 1. Fetch full relational group & member registrations and free entries concurrently
+      const [data, freeList] = await Promise.all([
+        getFullRegistrations(),
+        getFreeEntries()
+      ]);
+      
       setRegistrations(data);
-
-      // 2. Fetch free entries count from Supabase
-      const freeList = await getFreeEntries();
       setFreeEntriesCount(freeList.length);
 
-      // 3. Calculate today's attendance count directly from the Supabase attendance table (active event date 'd4')
+      // 2. Fetch today's attendance in one batch query
       const activeDateId = 'd4';
-      let totalEnteredToday = 0;
-      
-      for (const group of data) {
-        for (const m of group.members) {
-          const att = await getAttendanceForPass(m.pass_no, activeDateId);
-          if (att) {
-            totalEnteredToday++;
+      const { data: todayAttendanceList, error: attError } = await supabase
+        .from('attendance')
+        .select('pass_no')
+        .eq('event_date', activeDateId);
+
+      if (!attError && todayAttendanceList) {
+        const attendedPassNos = new Set(todayAttendanceList.map((a: any) => Number(a.pass_no)));
+        
+        let totalEnteredToday = 0;
+        for (const group of data) {
+          for (const m of group.members) {
+            if (attendedPassNos.has(Number(m.pass_no))) {
+              totalEnteredToday++;
+            }
           }
         }
+        setTodayAttendanceCount(totalEnteredToday);
+      } else {
+        setTodayAttendanceCount(0);
       }
-      setTodayAttendanceCount(totalEnteredToday);
     } catch (err: any) {
       console.error('Error fetching backend dashboard data:', err);
     } finally {
@@ -54,34 +67,62 @@ export default function DashboardPage() {
     }
   };
 
-  // Summary Metrics calculations with partial payment support
-  const totalBookings = registrations.length;
-  const totalPasses = registrations.reduce((acc, g) => acc + g.members.length, 0);
+  // Extract unique dates (YYYY-MM-DD format) from all member creation timestamps for the filter dropdown
+  const availableDates = useMemo(() => {
+    const datesSet = new Set<string>();
+    registrations.forEach((group) => {
+      group.members.forEach((m) => {
+        if (m.created_at) {
+          const dateOnly = m.created_at.toString().split('T')[0];
+          if (dateOnly) datesSet.add(dateOnly);
+        }
+      });
+    });
+    return Array.from(datesSet).sort().reverse();
+  }, [registrations]);
+
+  // Filter registrations based on selected dashboard date
+  const filteredRegistrations = useMemo(() => {
+    if (selectedDashboardDate === 'all') return registrations;
+    return registrations
+      .map((group) => {
+        const matchingMembers = group.members.filter((m) => {
+          const memberDate = m.created_at ? m.created_at.toString().split('T')[0] : '';
+          return memberDate === selectedDashboardDate;
+        });
+        return { ...group, members: matchingMembers };
+      })
+      .filter((group) => group.members.length > 0);
+  }, [registrations, selectedDashboardDate]);
+
+  // Summary Metrics calculations based on filtered registrations
+  const totalBookings = filteredRegistrations.length;
+  const totalPasses = filteredRegistrations.reduce((acc, g) => acc + g.members.length, 0);
   
-  const totalCollected = registrations.reduce((acc, g) => {
+  const totalCollected = filteredRegistrations.reduce((acc, g) => {
     const paidAmt = g.paid_amount ?? (g.paid ? g.total : 0);
     return acc + paidAmt;
   }, 0);
 
   const pendingBookingsList = useMemo(() => {
-    return registrations.filter((g) => {
+    return filteredRegistrations.filter((g) => {
       const paidAmt = g.paid_amount ?? (g.paid ? g.total : 0);
       return paidAmt < g.total;
     });
-  }, [registrations]);
+  }, [filteredRegistrations]);
 
   const pendingCount = pendingBookingsList.length;
 
-  // Flatten all members for individual pass search & listing
+  // Flatten all members for individual pass search & listing based on filtered registrations
   const allMembersList = useMemo(() => {
     const list: { member: RegistrationMember; group: RegistrationWithMembers }[] = [];
-    registrations.forEach((group) => {
+    filteredRegistrations.forEach((group) => {
       group.members.forEach((member) => {
         list.push({ member, group });
       });
     });
     return list;
-  }, [registrations]);
+  }, [filteredRegistrations]);
 
   const filteredMembers = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -103,7 +144,6 @@ export default function DashboardPage() {
     setErrorMessage('');
 
     try {
-      // 1. Update member name/phone in Supabase database table
       const { error: memberError } = await supabase
         .from('registration_members')
         .update({
@@ -114,7 +154,6 @@ export default function DashboardPage() {
 
       if (memberError) throw memberError;
 
-      // 2. Update group payment status, paid amount, & mode in Supabase database table
       const groupTotal = editingMemberPass.group.total;
       const isPaidFull = editingMemberPass.group.paid;
       const resolvedPaidAmt = isPaidFull ? groupTotal : (editingMemberPass.group.paid_amount ?? 0);
@@ -130,7 +169,6 @@ export default function DashboardPage() {
 
       if (groupError) throw groupError;
 
-      // Refresh data from backend
       await fetchDashboardData();
       setSaveStatus('idle');
       setEditingMemberPass(null);
@@ -149,31 +187,73 @@ export default function DashboardPage() {
       let csvContent = 'data:text/csv;charset=utf-8,';
       
       if (type === 'registrations') {
-        csvContent += 'PassNumber,GroupId,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
+        const groupCodeMap = new Map<string, string>();
+        registrations.forEach((group, index) => {
+          groupCodeMap.set(group.id, `G${index + 1}`);
+        });
+
+        csvContent += 'PassNumber,GroupCode,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
+        
+        let exportedRowsCount = 0;
         registrations.forEach((group) => {
+          const groupCode = groupCodeMap.get(group.id) || 'G1';
           const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
+          
           group.members.forEach((m) => {
-            csvContent += `${m.pass_no},${group.id},"${m.name}",${m.phone},${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
+            const memberDate = m.created_at ? m.created_at.toString().split('T')[0] : '';
+            if (selectedDashboardDate === 'all' || memberDate === selectedDashboardDate) {
+              csvContent += `${m.pass_no},${groupCode},"${m.name}","${m.phone}",${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
+              exportedRowsCount++;
+            }
           });
         });
+
+        if (exportedRowsCount === 0) {
+          alert(`No records found for the selected date: ${selectedDashboardDate}`);
+          return;
+        }
+
       } else if (type === 'attendance') {
         const { data: attendanceList } = await supabase.from('attendance').select('*');
         csvContent += 'PassNumber,EventDate,MarkedBy,MarkedAt\n';
+        
+        let exportedRowsCount = 0;
         attendanceList?.forEach((a: any) => {
-          csvContent += `${a.pass_no},${a.event_date},"${a.marked_by || ''}",${a.marked_at}\n`;
+          const attDate = a.marked_at ? a.marked_at.toString().split('T')[0] : '';
+          if (selectedDashboardDate === 'all' || attDate === selectedDashboardDate) {
+            csvContent += `${a.pass_no},${a.event_date},"${a.marked_by || ''}",${a.marked_at}\n`;
+            exportedRowsCount++;
+          }
         });
+
+        if (exportedRowsCount === 0) {
+          alert(`No attendance records found for the selected date: ${selectedDashboardDate}`);
+          return;
+        }
+
       } else {
         const freeList = await getFreeEntries();
         csvContent += 'ID,Name,Phone,CreatedBy,CreatedAt\n';
+        
+        let exportedRowsCount = 0;
         freeList.forEach((f) => {
-          csvContent += `${f.id},"${f.name}",${f.phone},"${f.created_by || ''}",${f.created_at}\n`;
+          const freeDate = f.created_at ? f.created_at.toString().split('T')[0] : '';
+          if (selectedDashboardDate === 'all' || freeDate === selectedDashboardDate) {
+            csvContent += `${f.id},"${f.name}","${f.phone}","${f.created_by || ''}",${f.created_at}\n`;
+            exportedRowsCount++;
+          }
         });
+
+        if (exportedRowsCount === 0) {
+          alert(`No free entry records found for the selected date: ${selectedDashboardDate}`);
+          return;
+        }
       }
 
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement('a');
       link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `garba_${type}_export.csv`);
+      link.setAttribute('download', `garba_${type}_${selectedDashboardDate}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -187,7 +267,7 @@ export default function DashboardPage() {
     <main className="min-h-screen bg-slate-950 text-slate-100 pb-32 pt-4 px-4 max-w-[430px] mx-auto font-sans">
       
       {/* Header */}
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+      <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-800">
         <div>
           <span className="text-xs uppercase tracking-wider text-amber-400 font-bold block">Admin Overview (Supabase Live)</span>
           <h1 className="text-2xl font-black tracking-tight text-white">Live Dashboard</h1>
@@ -210,8 +290,28 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Dashboard & Export Date Filter Control */}
+      <div className="bg-slate-900/90 border border-slate-800 p-3.5 rounded-2xl mb-5 shadow flex items-center justify-between gap-3">
+        <div className="space-y-0.5">
+          <span className="text-[10px] uppercase font-bold text-amber-400 block tracking-wider">Date Filter</span>
+          <span className="text-xs font-medium text-slate-300">Filter View & Downloads</span>
+        </div>
+        <select
+          value={selectedDashboardDate}
+          onChange={(e) => setSelectedDashboardDate(e.target.value)}
+          className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:border-amber-500 focus:outline-none"
+        >
+          <option value="all">Full Data (All Dates)</option>
+          {availableDates.map((dateStr) => (
+            <option key={dateStr} value={dateStr}>
+              {dateStr}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Summary Cards Grid */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
+      <div className="grid grid-cols-2 gap-3 mb-5">
         <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl shadow">
           <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Passes</span>
           <span className="text-2xl font-black text-white mt-1 block">
@@ -243,7 +343,7 @@ export default function DashboardPage() {
 
       {/* PENDING BALANCES & PARTIAL PAYMENTS SECTION */}
       {!loading && pendingBookingsList.length > 0 && (
-        <div className="space-y-3 mb-6 bg-rose-950/20 border border-rose-500/30 p-4 rounded-3xl">
+        <div className="space-y-3 mb-5 bg-rose-950/20 border border-rose-500/30 p-4 rounded-3xl">
           <div className="flex justify-between items-center">
             <h2 className="text-xs font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
               <span>⚠️</span> Pending Balances ({pendingBookingsList.length})
@@ -293,7 +393,7 @@ export default function DashboardPage() {
       )}
 
       {/* Search Input */}
-      <div className="space-y-3 mb-6">
+      <div className="space-y-3 mb-5">
         <div className="relative">
           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">🔍</span>
           <input
@@ -319,7 +419,7 @@ export default function DashboardPage() {
           <div className="text-center py-12 text-slate-500 text-sm">Loading database records...</div>
         ) : filteredMembers.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-sm bg-slate-900/40 rounded-2xl border border-slate-900">
-            No passes found in database.
+            No passes found for this date.
           </div>
         ) : (
           <div className="space-y-2.5">
