@@ -192,17 +192,25 @@ export default function DashboardPage() {
           groupCodeMap.set(group.id, `G${index + 1}`);
         });
 
-        csvContent += 'PassNumber,GroupCode,Name,Phone,PassType,PaymentMode,IsPaid,PaidAmount,BookingTotal,CreatedBy,CreatedAt\n';
+        // Headers updated to distinguish individual share vs full group combined total
+        csvContent += 'PassNumber,GroupCode,Name,Phone,PassType,PaymentMode,IsPaid,IndividualPaidAmount,IndividualBookingTotal,GroupTotalAmount,CreatedBy,CreatedAt\n';
         
         let exportedRowsCount = 0;
         registrations.forEach((group) => {
           const groupCode = groupCodeMap.get(group.id) || 'G1';
-          const paidAmt = group.paid_amount ?? (group.paid ? group.total : 0);
+          const groupTotal = group.total;
+          const groupPaidAmt = group.paid_amount ?? (group.paid ? groupTotal : 0);
+          const personCount = Math.max(1, group.persons);
           
+          // Calculate individual shares
+          const individualShareTotal = Math.round(groupTotal / personCount);
+          const individualSharePaid = Math.round(groupPaidAmt / personCount);
+
           group.members.forEach((m) => {
             const memberDate = m.created_at ? m.created_at.toString().split('T')[0] : '';
             if (selectedDashboardDate === 'all' || memberDate === selectedDashboardDate) {
-              csvContent += `${m.pass_no},${groupCode},"${m.name}","${m.phone}",${group.pass_type},${group.payment_mode},${group.paid},${paidAmt},${group.total},"${group.created_by || ''}",${m.created_at}\n`;
+              // Exports individual paid amount, individual share total, and the full group total separately
+              csvContent += `${m.pass_no},${groupCode},"${m.name}","${m.phone}",${group.pass_type},${group.payment_mode},${group.paid},${individualSharePaid},${individualShareTotal},${groupTotal},"${group.created_by || ''}",${m.created_at}\n`;
               exportedRowsCount++;
             }
           });
